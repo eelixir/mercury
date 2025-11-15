@@ -1,3 +1,3 @@
-# <img src="https://github.com/user-attachments/assets/fed8f8e7-3816-4ff8-abdf-20896be885bc" width="400">
+# <img src="https://github.com/user-attachments/assets/ad6c800d-607d-41f7-a15f-0e50bcbf6801" width="400">
 
 C++ Trading Engine
