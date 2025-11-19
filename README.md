@@ -1,4 +1,4 @@
-# <img src="https://github.com/user-attachments/assets ad6c800d-607d-41f7-a15f-0e50bcbf6801" width="400">
+# <img src="https://github.com/user-attachments/assets/7ee41ddf-cf24-42fb-953b-d44c55e9f352" width="400">
 
 > High-performance C++ Trading Engine with order book, matching logic, risk controls, and strategy layer.
 
