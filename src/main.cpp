@@ -1,0 +1,56 @@
+#include <iostream>
+#include "OrderBook.h" 
+#include "Order.h"
+
+int main() {
+    std::cout << "Initializing Mercury Trading Engine...\n";
+
+    // Create the OrderBook
+    Mercury::OrderBook book;
+
+    // Create some sample orders
+    // Buy Order: Bid $100.50 for 10 units
+    Mercury::Order buyOrder1;
+    buyOrder1.id = 1;
+    buyOrder1.side = Mercury::Side::Buy;
+    buyOrder1.orderType = Mercury::OrderType::Limit;
+    buyOrder1.price = 100.50;
+    buyOrder1.quantity = 10;
+    buyOrder1.timestamp = 1000;
+
+    // Buy Order: Bid $100.00 for 5 units
+    Mercury::Order buyOrder2;
+    buyOrder2.id = 2;
+    buyOrder2.side = Mercury::Side::Buy;
+    buyOrder2.orderType = Mercury::OrderType::Limit;
+    buyOrder2.price = 100.00;
+    buyOrder2.quantity = 5;
+    buyOrder2.timestamp = 1001;
+
+    // Sell Order: Ask $101.00 for 20 units
+    Mercury::Order sellOrder1;
+    sellOrder1.id = 3;
+    sellOrder1.side = Mercury::Side::Sell;
+    sellOrder1.orderType = Mercury::OrderType::Limit;
+    sellOrder1.price = 101.00;
+    sellOrder1.quantity = 20;
+    sellOrder1.timestamp = 1002;
+
+    // Add orders to the book
+    std::cout << "Adding orders...\n";
+    book.addOrder(buyOrder1);
+    book.addOrder(buyOrder2);
+    book.addOrder(sellOrder1);
+
+    // Print the book state
+    book.printBook();
+
+    // Remove an order
+    std::cout << "\nRemoving Order #1...\n";
+    book.removeOrder(1);
+    
+    // Print again to verify removal
+    book.printBook();
+
+    return 0;
+}
