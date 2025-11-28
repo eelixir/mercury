@@ -5,6 +5,9 @@
 namespace Mercury {
 
     void OrderBook::addOrder(const Order& order) {
+        // Store location for O(1) lookup
+        orderLookup[order.id] = { order.price, order.side };
+
         if (order.side == Side::Buy) {
             // Add to Bids map
             bids[order.price].push_back(order);
@@ -15,34 +18,46 @@ namespace Mercury {
     }
 
     void OrderBook::removeOrder(uint64_t orderId) {
-        // Helper lambda to remove from a map using Erase-Remove idiom for vectors
-        auto removeFromMap = [&](auto& bookMap) {
-            for (auto it = bookMap.begin(); it != bookMap.end(); ) {
-                auto& orders = it->second;
+        // 1. Find the order location in O(1)
+        auto it = orderLookup.find(orderId);
+        if (it == orderLookup.end()) {
+            return; // Order not found
+        }
+
+        const auto& location = it->second;
+
+        // 2. Get the correct map and vector
+        // We use a pointer to the vector to avoid copying
+        std::vector<Order>* orders = nullptr;
+        
+        if (location.side == Side::Buy) {
+            auto bidIt = bids.find(location.price);
+            if (bidIt != bids.end()) orders = &bidIt->second;
+        } else {
+            auto askIt = asks.find(location.price);
+            if (askIt != asks.end()) orders = &askIt->second;
+        }
+
+        // 3. Remove from the vector
+        if (orders) {
+            auto newEnd = std::remove_if(orders->begin(), orders->end(), 
+                [orderId](const Order& o) {
+                    return o.id == orderId;
+                });
             
-                // std::remove_if moves non-matching elements to the front
-                // and returns an iterator to the "new end"
-                auto newEnd = std::remove_if(orders.begin(), orders.end(), 
-                    [orderId](const Order& o) {
-                        return o.id == orderId;
-                    });
-
-                // If we found and "removed" elements, actually erase them from the vector
-                if (newEnd != orders.end()) {
-                    orders.erase(newEnd, orders.end());
-                }
-
-                // If price level is empty, remove the map entry to save memory
-                if (orders.empty()) {
-                    it = bookMap.erase(it);
-                } else {
-                    ++it;
-                }
+            if (newEnd != orders->end()) {
+                orders->erase(newEnd, orders->end());
             }
-        };
 
-        removeFromMap(bids);
-        removeFromMap(asks);
+            // Clean up empty price levels
+            if (orders->empty()) {
+                if (location.side == Side::Buy) bids.erase(location.price);
+                else asks.erase(location.price);
+            }
+        }
+
+        // 4. Remove from lookup map
+        orderLookup.erase(it);
     }
 
     void OrderBook::printBook() const {
