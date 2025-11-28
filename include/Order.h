@@ -23,13 +23,13 @@ namespace Mercury {
         uint64_t timestamp;     // for price-time priority
         OrderType orderType;
         Side side;
-        double price;
+        int64_t price;
         uint64_t quantity;
 
         // Helper to quickly check if an order is valid
         bool isValid() const {
             // Market orders might have price 0, but quantity must be > 0
-            return quantity > 0 && price >= 0.0;
+            return quantity > 0 && price >= 0;
         }
     };
 }

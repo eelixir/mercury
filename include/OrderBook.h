@@ -11,10 +11,10 @@ namespace Mercury {
         private:
             // Bids: High prices are better -> Sort Descending (std::greater)
             // We use a list to store multiple orders at the same price (Time priority)
-            std::map<double, std::list<Order>, std::greater<double>> bids;
+            std::map<int64_t, std::list<Order>, std::greater<int64_t>> bids;
 
             // Asks: Low prices are better -> Sort Ascending (std::less - default)
-            std::map<double, std::list<Order>> asks;
+            std::map<int64_t, std::list<Order>> asks;
 
         public:
             // Constructor
@@ -30,7 +30,7 @@ namespace Mercury {
             // Getters for the matching engine (later phases)
             bool hasBids() const { return !bids.empty(); }
             bool hasAsks() const { return !asks.empty(); }
-            double getBestBid() const { return bids.begin()->first; }
-            double getBestAsk() const { return asks.begin()->first; }
+            int64_t getBestBid() const { return bids.begin()->first; }
+            int64_t getBestAsk() const { return asks.begin()->first; }
     };
 }

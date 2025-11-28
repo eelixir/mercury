@@ -9,30 +9,30 @@ int main() {
     Mercury::OrderBook book;
 
     // Create some sample orders
-    // Buy Order: Bid $100.50 for 10 units
+    // Buy Order: Bid $100.50 for 10 units (Price in cents: 10050)
     Mercury::Order buyOrder1;
     buyOrder1.id = 1;
     buyOrder1.side = Mercury::Side::Buy;
     buyOrder1.orderType = Mercury::OrderType::Limit;
-    buyOrder1.price = 100.50;
+    buyOrder1.price = 10050;
     buyOrder1.quantity = 10;
     buyOrder1.timestamp = 1000;
 
-    // Buy Order: Bid $100.00 for 5 units
+    // Buy Order: Bid $100.00 for 5 units (Price in cents: 10000)
     Mercury::Order buyOrder2;
     buyOrder2.id = 2;
     buyOrder2.side = Mercury::Side::Buy;
     buyOrder2.orderType = Mercury::OrderType::Limit;
-    buyOrder2.price = 100.00;
+    buyOrder2.price = 10000;
     buyOrder2.quantity = 5;
     buyOrder2.timestamp = 1001;
 
-    // Sell Order: Ask $101.00 for 20 units
+    // Sell Order: Ask $101.00 for 20 units (Price in cents: 10100)
     Mercury::Order sellOrder1;
     sellOrder1.id = 3;
     sellOrder1.side = Mercury::Side::Sell;
     sellOrder1.orderType = Mercury::OrderType::Limit;
-    sellOrder1.price = 101.00;
+    sellOrder1.price = 10100;
     sellOrder1.quantity = 20;
     sellOrder1.timestamp = 1002;
 

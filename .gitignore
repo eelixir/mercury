@@ -42,3 +42,7 @@
 
 # IDE files
 .vscode/
+
+# CMake Build
+build/
+
