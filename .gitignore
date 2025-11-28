@@ -46,3 +46,6 @@
 # CMake Build
 build/
 
+# GoogleTest (fetched by CMake)
+googletest/
+
