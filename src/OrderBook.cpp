@@ -1,12 +1,12 @@
 #include "OrderBook.h"
 #include <iostream>
+#include <algorithm> // For std::remove_if
 
 namespace Mercury {
 
     void OrderBook::addOrder(const Order& order) {
         if (order.side == Side::Buy) {
             // Add to Bids map
-            // [] operator creates the list if it doesn't exist, then we push back
             bids[order.price].push_back(order);
         } else {
             // Add to Asks map
@@ -15,18 +15,22 @@ namespace Mercury {
     }
 
     void OrderBook::removeOrder(uint64_t orderId) {
-        // In a real engine, you would use a hashmap (O(1)) to look up where the order is.
-        // For current phase iterating is acceptable, but will implement hashmap in the future.
-
-        // Helper lambda to remove from a map
+        // Helper lambda to remove from a map using Erase-Remove idiom for vectors
         auto removeFromMap = [&](auto& bookMap) {
             for (auto it = bookMap.begin(); it != bookMap.end(); ) {
                 auto& orders = it->second;
             
-                // Remove order with matching ID from the list
-                orders.remove_if([orderId](const Order& o) {
-                    return o.id == orderId;
-                });
+                // std::remove_if moves non-matching elements to the front
+                // and returns an iterator to the "new end"
+                auto newEnd = std::remove_if(orders.begin(), orders.end(), 
+                    [orderId](const Order& o) {
+                        return o.id == orderId;
+                    });
+
+                // If we found and "removed" elements, actually erase them from the vector
+                if (newEnd != orders.end()) {
+                    orders.erase(newEnd, orders.end());
+                }
 
                 // If price level is empty, remove the map entry to save memory
                 if (orders.empty()) {

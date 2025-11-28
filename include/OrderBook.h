@@ -2,7 +2,7 @@
 
 #include "Order.h"
 #include <map>
-#include <list>
+#include <vector>
 #include <iostream>
 
 namespace Mercury {
@@ -10,11 +10,11 @@ namespace Mercury {
     class OrderBook {
         private:
             // Bids: High prices are better -> Sort Descending (std::greater)
-            // We use a list to store multiple orders at the same price (Time priority)
-            std::map<int64_t, std::list<Order>, std::greater<int64_t>> bids;
+            // We use a vector for contiguous memory (better cache locality)
+            std::map<int64_t, std::vector<Order>, std::greater<int64_t>> bids;
 
             // Asks: Low prices are better -> Sort Ascending (std::less - default)
-            std::map<int64_t, std::list<Order>> asks;
+            std::map<int64_t, std::vector<Order>> asks;
 
         public:
             // Constructor

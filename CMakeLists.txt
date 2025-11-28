@@ -9,9 +9,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 add_executable(mercury
     src/main.cpp
     src/OrderBook.cpp
-    src/OrderBook.h
-    src/Order.h
+    include/OrderBook.h
+    include/Order.h
 )
 
-# Include the src directory so headers can be found easily
-target_include_directories(mercury PUBLIC src)
+# Include the src and include directories so headers can be found easily
+target_include_directories(mercury PUBLIC src include)
