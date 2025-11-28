@@ -1,0 +1,8 @@
+id,timestamp,type,side,price,quantity
+1,1000,limit,buy,10050,10
+2,1001,limit,buy,10000,5
+3,1002,limit,sell,10100,20
+4,1003,market,buy,0,15
+5,1004,limit,sell,10150,8
+6,1005,limit,buy,10025,12
+7,1006,limit,sell,10075,25

@@ -9,8 +9,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 add_executable(mercury
     src/main.cpp
     src/OrderBook.cpp
+    src/CSVParser.cpp
     include/OrderBook.h
     include/Order.h
+    include/CSVParser.h
 )
 
 # Include the src and include directories so headers can be found easily
