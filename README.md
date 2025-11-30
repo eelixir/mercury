@@ -11,7 +11,7 @@
 - [x] handle edge cases (partial fills, empty book, invalid orders): integrate robust error handling for critical scenarios
 - [x] unit tests for correctness & stress testing with sample datasets: validate the entire matching engine with thorough test coverage
 - [x] file i/o: read orders from csv, output trades to file: complete the data flow by ingesting orders and outputting trade results
-- [ ] trade logger (csv output): log all executed trades to the required trades.csv file
+- [x] trade logger (csv output): log all executed trades to the required trades.csv file
 - [ ] profile code with valgrind/gprof: identify bottlenecks and memory issues before optimization
 - [ ] replace stl containers with custom data structures for speed: swap out std::map/std::multimap for custom, optimized structures (e.g., hash map)
 - [ ] cache-friendly design (contiguous memory, pre-allocation): implement memory optimizations for improved performance
