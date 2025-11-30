@@ -10,9 +10,11 @@ add_executable(mercury
     src/main.cpp
     src/OrderBook.cpp
     src/CSVParser.cpp
+    src/MatchingEngine.cpp
     include/OrderBook.h
     include/Order.h
     include/CSVParser.h
+    include/MatchingEngine.h
 )
 
 # Include the src and include directories so headers can be found easily
@@ -22,6 +24,7 @@ target_include_directories(mercury PUBLIC src include)
 add_library(mercury_lib
     src/OrderBook.cpp
     src/CSVParser.cpp
+    src/MatchingEngine.cpp
 )
 target_include_directories(mercury_lib PUBLIC include)
 
