@@ -48,12 +48,14 @@ add_executable(mercury
     src/MatchingEngine.cpp
     src/TradeWriter.cpp
     src/RiskManager.cpp
+    src/PnLTracker.cpp
     include/OrderBook.h
     include/Order.h
     include/CSVParser.h
     include/MatchingEngine.h
     include/TradeWriter.h
     include/RiskManager.h
+    include/PnLTracker.h
 )
 
 # Include the src and include directories so headers can be found easily
@@ -66,6 +68,7 @@ add_library(mercury_lib
     src/MatchingEngine.cpp
     src/TradeWriter.cpp
     src/RiskManager.cpp
+    src/PnLTracker.cpp
 )
 target_include_directories(mercury_lib PUBLIC include)
 
@@ -83,6 +86,7 @@ set(MERCURY_HEADERS
     include/MatchingEngine.h
     include/TradeWriter.h
     include/RiskManager.h
+    include/PnLTracker.h
 )
 target_sources(mercury_lib PRIVATE ${MERCURY_HEADERS})
 
@@ -107,6 +111,7 @@ add_executable(mercury_tests
     tests/order_validation_test.cpp
     tests/stress_test.cpp
     tests/risk_manager_test.cpp
+    tests/pnl_tracker_test.cpp
 )
 
 target_link_libraries(mercury_tests

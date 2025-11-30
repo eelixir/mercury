@@ -12,12 +12,13 @@ namespace Mercury {
      * CSVParser - Parses CSV files containing market order data
      * 
      * Expected CSV format (with header):
-     * id,timestamp,type,side,price,quantity
+     * id,timestamp,type,side,price,quantity[,client_id]
      * 
      * type: "market", "limit", "cancel", "modify"
      * side: "buy", "sell"
      * price: integer (in cents/smallest unit)
      * quantity: positive integer
+     * client_id: optional, positive integer for P&L tracking
      */
     class CSVParser {
     public:

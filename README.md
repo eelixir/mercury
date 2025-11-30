@@ -18,7 +18,8 @@ Mercury is a low-latency trading engine implementing a full limit order book wit
 - **Price-Time Priority:** FIFO matching at each price level
 - **Self-Trade Prevention:** Optional client ID based filtering
 - **Risk Management:** Pre-trade risk checks with position/exposure limits
-- **Trade Logging:** CSV output for all executions and risk events
+- **P&L Tracking:** Realized and unrealized P&L with FIFO cost basis
+- **Trade Logging:** CSV output for all executions, risk events, and P&L snapshots
 - **Comprehensive Validation:** Detailed rejection reasons for invalid orders
 
 ## Architecture
@@ -37,6 +38,14 @@ Mercury is a low-latency trading engine implementing a full limit order book wit
 │  ┌──────────────────┐  ┌──────────────────┐  ┌───────────────┐  │
 │  │ Position Limits  │  │ Exposure Limits  │  │ Order Limits  │  │
 │  │ (per client)     │  │ (gross/net)      │  │ (qty/value)   │  │
+│  └──────────────────┘  └──────────────────┘  └───────────────┘  │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+┌────────────────────────────▼────────────────────────────────────┐
+│                        PnLTracker                                │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌───────────────┐  │
+│  │ Position Tracking│  │ Realized P&L     │  │ Unrealized    │  │
+│  │ (FIFO method)    │  │ (closed trades)  │  │ (mark-to-mkt) │  │
 │  └──────────────────┘  └──────────────────┘  └───────────────┘  │
 └────────────────────────────┬────────────────────────────────────┘
                              │
@@ -79,6 +88,7 @@ mercury/
 │   ├── PriceLevel.h   # Price level with order queue
 │   ├── MatchingEngine.h
 │   ├── RiskManager.h  # Pre-trade risk checks
+│   ├── PnLTracker.h   # Position and P&L tracking
 │   ├── HashMap.h      # Robin Hood hash map
 │   ├── IntrusiveList.h
 │   ├── ObjectPool.h   # Memory pool allocator
@@ -118,7 +128,7 @@ cmake --build build
 
 ```bash
 # Process orders from CSV
-./build/mercury data/sample_orders.csv trades.csv executions.csv riskevents.csv
+./build/mercury data/sample_orders.csv trades.csv executions.csv riskevents.csv pnl.csv
 
 # Run interactive demo
 ./build/mercury
@@ -134,6 +144,7 @@ Input:       data/sample_orders.csv
 Trades:      trades.csv
 Executions:  executions.csv
 Risk Events: riskevents.csv
+P&L:         pnl.csv
 ========================================
 
 Processing Complete
@@ -145,6 +156,11 @@ Risk Manager Statistics:
   Risk Checks:  50
   Approved:     48
   Risk Rejected: 2
+
+P&L Summary:
+  Clients tracked: 4
+  Client 1: Net Pos=150, Realized=0, Unrealized=11515, Total=11515
+  Client 2: Net Pos=-420, Realized=2245, Unrealized=0, Total=2245
 
 Total Trades: 37
 Total Volume: 1903 units
@@ -172,10 +188,11 @@ cmake --build build
 
 ## Testing
 
-165+ unit tests covering:
+180+ unit tests covering:
 - Order book operations (insert, remove, update)
 - Matching engine (limit, market, IOC, FOK)
 - Risk manager (position limits, exposure limits, order limits)
+- P&L tracker (realized P&L, unrealized P&L, FIFO cost basis)
 - Edge cases (partial fills, empty book, invalid orders)
 - Stress tests (100K+ orders, deep books)
 - Data structure correctness (HashMap, IntrusiveList)
@@ -201,7 +218,7 @@ cmake --build build
 - [x] Profiling infrastructure (sanitizers, Google Benchmark)
 - [x] Cache-friendly design with memory pre-allocation
 - [x] Risk manager (position limits, exposure checks)
-- [ ] PnL module (realized + unrealized)
+- [x] PnL module (realized + unrealized)
 - [ ] Multithreading/concurrency
 - [ ] Strategy layer (market making, momentum)
 - [ ] Backtesting framework

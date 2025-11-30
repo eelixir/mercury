@@ -7,6 +7,7 @@
 #include "MatchingEngine.h"
 #include "TradeWriter.h"
 #include "RiskManager.h"
+#include "PnLTracker.h"
 
 // Helper function to convert ExecutionStatus to string
 std::string statusToString(Mercury::ExecutionStatus status) {
@@ -172,6 +173,7 @@ int main(int argc, char* argv[]) {
         std::string tradesFile = (argc > 2) ? argv[2] : "trades.csv";
         std::string reportsFile = (argc > 3) ? argv[3] : "executions.csv";
         std::string riskEventsFile = (argc > 4) ? argv[4] : "riskevents.csv";
+        std::string pnlFile = (argc > 5) ? argv[5] : "pnl.csv";
 
         std::cout << "\n========================================\n";
         std::cout << "   Mercury File I/O Mode\n";
@@ -180,6 +182,7 @@ int main(int argc, char* argv[]) {
         std::cout << "Trades:      " << tradesFile << "\n";
         std::cout << "Executions:  " << reportsFile << "\n";
         std::cout << "Risk Events: " << riskEventsFile << "\n";
+        std::cout << "P&L:         " << pnlFile << "\n";
         std::cout << "========================================\n\n";
 
         // Parse input orders
@@ -203,6 +206,7 @@ int main(int argc, char* argv[]) {
         Mercury::TradeWriter tradeWriter(tradesFile);
         Mercury::ExecutionReportWriter reportWriter(reportsFile);
         Mercury::RiskEventWriter riskEventWriter(riskEventsFile);
+        Mercury::PnLTracker pnlTracker(pnlFile);
 
         if (!tradeWriter.open()) {
             std::cerr << "Error: Could not open trades output file\n";
@@ -216,6 +220,11 @@ int main(int argc, char* argv[]) {
 
         if (!riskEventWriter.open()) {
             std::cerr << "Error: Could not open risk events output file\n";
+            return 1;
+        }
+
+        if (!pnlTracker.open()) {
+            std::cerr << "Error: Could not open P&L output file\n";
             return 1;
         }
 
@@ -236,7 +245,7 @@ int main(int argc, char* argv[]) {
         });
 
         // Set up trade callback to write trades as they occur
-        engine.setTradeCallback([&tradeWriter](const Mercury::Trade& trade) {
+        engine.setTradeCallback([&tradeWriter, &pnlTracker](const Mercury::Trade& trade) {
             tradeWriter.writeTrade(trade);
         });
 
@@ -286,6 +295,13 @@ int main(int argc, char* argv[]) {
                     riskManager.onTradeExecuted(trade, 
                         order.side == Mercury::Side::Buy ? order.clientId : 0,
                         order.side == Mercury::Side::Sell ? order.clientId : 0);
+                    
+                    // Track P&L for both sides of the trade
+                    // The aggressive order's client is order.clientId
+                    // For simplicity, we use clientId for the aggressive side
+                    uint64_t buyClientId = order.side == Mercury::Side::Buy ? order.clientId : 0;
+                    uint64_t sellClientId = order.side == Mercury::Side::Sell ? order.clientId : 0;
+                    pnlTracker.onTradeExecuted(trade, buyClientId, sellClientId, trade.price);
                 }
             }
             
@@ -315,6 +331,7 @@ int main(int argc, char* argv[]) {
         tradeWriter.close();
         reportWriter.close();
         riskEventWriter.close();
+        pnlTracker.close();
 
         // Print summary
         std::cout << "\n========================================\n";
@@ -345,6 +362,18 @@ int main(int argc, char* argv[]) {
         std::cout << "  Trades written: " << tradeWriter.getTradeCount() << " -> " << tradesFile << "\n";
         std::cout << "  Reports written: " << reportWriter.getReportCount() << " -> " << reportsFile << "\n";
         std::cout << "  Risk events:    " << riskEventWriter.getEventCount() << " -> " << riskEventsFile << "\n";
+        std::cout << "  P&L snapshots:  " << pnlTracker.getSnapshotCount() << " -> " << pnlFile << "\n";
+        std::cout << "\n--- P&L Summary ---\n";
+        std::cout << "  Clients tracked: " << pnlTracker.getClientCount() << "\n";
+        for (const auto& [clientId, pnl] : pnlTracker.getAllClientPnL()) {
+            if (clientId > 0) {
+                std::cout << "  Client " << clientId << ": "
+                          << "Net Pos=" << pnl.netPosition 
+                          << ", Realized=" << pnl.realizedPnL 
+                          << ", Unrealized=" << pnl.unrealizedPnL 
+                          << ", Total=" << pnl.totalPnL << "\n";
+            }
+        }
         std::cout << "========================================\n";
 
         // Optionally print final order book
@@ -355,11 +384,12 @@ int main(int argc, char* argv[]) {
         }
     } else {
         // Run interactive demo
-        std::cout << "\nUsage: mercury <orders.csv> [trades.csv] [executions.csv] [riskevents.csv]\n";
+        std::cout << "\nUsage: mercury <orders.csv> [trades.csv] [executions.csv] [riskevents.csv] [pnl.csv]\n";
         std::cout << "  orders.csv     - Input file with orders to process\n";
         std::cout << "  trades.csv     - Output file for trade results (default: trades.csv)\n";
         std::cout << "  executions.csv - Output file for execution reports (default: executions.csv)\n";
-        std::cout << "  riskevents.csv - Output file for risk events (default: riskevents.csv)\n\n";
+        std::cout << "  riskevents.csv - Output file for risk events (default: riskevents.csv)\n";
+        std::cout << "  pnl.csv        - Output file for P&L snapshots (default: pnl.csv)\n\n";
         runDemo();
     }
 

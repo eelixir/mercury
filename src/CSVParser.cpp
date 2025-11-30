@@ -92,6 +92,14 @@ namespace Mercury {
             // Parse quantity
             order.quantity = std::stoull(trim(fields[5]));
 
+            // Parse optional clientId (7th field)
+            if (fields.size() >= 7) {
+                std::string clientIdStr = trim(fields[6]);
+                if (!clientIdStr.empty()) {
+                    order.clientId = std::stoull(clientIdStr);
+                }
+            }
+
         } catch (const std::exception& e) {
             std::cerr << "CSVParser: Parse error in line '" << line 
                       << "': " << e.what() << "\n";
