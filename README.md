@@ -21,6 +21,7 @@ Mercury is a low-latency trading engine implementing a full limit order book wit
 - **P&L Tracking:** Realized and unrealized P&L with FIFO cost basis
 - **Trade Logging:** CSV output for all executions, risk events, and P&L snapshots
 - **Comprehensive Validation:** Detailed rejection reasons for invalid orders
+- **Concurrency Support:** Thread pool, parallel CSV parsing, async I/O writers
 
 ## Architecture
 
@@ -31,6 +32,14 @@ Mercury is a low-latency trading engine implementing a full limit order book wit
 │  │ Order       │  │ Trade       │  │ Execution               │  │
 │  │ Validation  │─▶│ Matching    │─▶│ Callbacks               │  │
 │  └─────────────┘  └─────────────┘  └─────────────────────────┘  │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+┌────────────────────────────▼────────────────────────────────────┐
+│                    ConcurrentMatchingEngine                      │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌───────────────┐  │
+│  │ Symbol Sharding  │  │ Thread Pool      │  │ Async         │  │
+│  │ (parallel books) │  │ (work stealing)  │  │ Callbacks     │  │
+│  └──────────────────┘  └──────────────────┘  └───────────────┘  │
 └────────────────────────────┬────────────────────────────────────┘
                              │
 ┌────────────────────────────▼────────────────────────────────────┐
@@ -76,6 +85,10 @@ Mercury is a low-latency trading engine implementing a full limit order book wit
 | **IntrusiveList** | Order queue at each price level | O(1) insert/remove |
 | **ObjectPool** | Pre-allocated order nodes | O(1) alloc/free |
 | **PriceLevel** | Orders + cached aggregate quantity | O(1) quantity query |
+| **ThreadPool** | Task scheduling for parallel work | O(1) submit |
+| **AsyncWriter** | Background I/O with buffering | Lock-free fast path |
+| **ConcurrentQueue** | Thread-safe producer/consumer | Lock-based |
+| **SpinLock** | Short critical section protection | Wait-free fast path |
 
 ## Project Structure
 
@@ -87,16 +100,21 @@ mercury/
 │   ├── OrderNode.h    # Intrusive list node for orders
 │   ├── PriceLevel.h   # Price level with order queue
 │   ├── MatchingEngine.h
+│   ├── ConcurrentMatchingEngine.h  # Thread-safe sharded engine
 │   ├── RiskManager.h  # Pre-trade risk checks
 │   ├── PnLTracker.h   # Position and P&L tracking
 │   ├── HashMap.h      # Robin Hood hash map
 │   ├── IntrusiveList.h
 │   ├── ObjectPool.h   # Memory pool allocator
+│   ├── ThreadPool.h   # Thread pool and parallel utilities
+│   ├── AsyncWriter.h  # Async file I/O with buffering
 │   ├── Profiler.h     # Latency instrumentation
-│   ├── CSVParser.h
+│   ├── CSVParser.h    # CSV parsing (with parallel mode)
 │   └── TradeWriter.h
 ├── src/               # Implementation files
 ├── tests/             # Google Test suites
+│   ├── concurrency_test.cpp  # Thread pool, async writer tests
+│   └── ...
 ├── benchmarks/        # Google Benchmark micro-benchmarks
 ├── data/              # Sample order datasets
 └── docs/              # Additional documentation
@@ -130,9 +148,25 @@ cmake --build build
 # Process orders from CSV
 ./build/mercury data/sample_orders.csv trades.csv executions.csv riskevents.csv pnl.csv
 
+# Run with concurrency enabled (parallel parsing + async post-trade)
+./build/mercury data/sample_orders.csv --concurrent
+
+# Run with async I/O writers (background file writes)
+./build/mercury data/sample_orders.csv --async-io
+
+# Run with both (maximum parallelism)
+./build/mercury data/sample_orders.csv --concurrent --async-io
+
 # Run interactive demo
 ./build/mercury
 ```
+
+### Command Line Options
+
+| Option | Short | Description |
+|--------|-------|-------------|
+| `--concurrent` | `-c` | Enable parallel CSV parsing and async post-trade processing |
+| `--async-io` | `-a` | Enable asynchronous file I/O with background writer threads |
 
 ### Example Output
 
@@ -140,30 +174,35 @@ cmake --build build
 ========================================
    Mercury File I/O Mode
 ========================================
-Input:       data/sample_orders.csv
+Input:       data/sample_orders_with_clients.csv
 Trades:      trades.csv
 Executions:  executions.csv
 Risk Events: riskevents.csv
 P&L:         pnl.csv
+Concurrency: Enabled
+Async I/O:   Disabled
 ========================================
 
 Processing Complete
 ----------------------------------------
-Time elapsed: 0.42 ms
-Throughput: 119047 orders/sec
+Parse time:    1.03 ms
+Process time:  0.54 ms
+Total time:    1.57 ms
+Throughput:    92251 orders/sec
 
 Risk Manager Statistics:
   Risk Checks:  50
   Approved:     48
   Risk Rejected: 2
+  Clients:      5
 
 P&L Summary:
   Clients tracked: 4
   Client 1: Net Pos=150, Realized=0, Unrealized=11515, Total=11515
   Client 2: Net Pos=-420, Realized=2245, Unrealized=0, Total=2245
 
-Total Trades: 37
-Total Volume: 1903 units
+Total Trades: 24
+Total Volume: 1188 units
 ```
 
 ## Performance
@@ -188,11 +227,12 @@ cmake --build build
 
 ## Testing
 
-180+ unit tests covering:
+200+ unit tests covering:
 - Order book operations (insert, remove, update)
 - Matching engine (limit, market, IOC, FOK)
 - Risk manager (position limits, exposure limits, order limits)
 - P&L tracker (realized P&L, unrealized P&L, FIFO cost basis)
+- Concurrency (thread pool, async writers, parallel parsing)
 - Edge cases (partial fills, empty book, invalid orders)
 - Stress tests (100K+ orders, deep books)
 - Data structure correctness (HashMap, IntrusiveList)
@@ -219,7 +259,8 @@ cmake --build build
 - [x] Cache-friendly design with memory pre-allocation
 - [x] Risk manager (position limits, exposure checks)
 - [x] PnL module (realized + unrealized)
-- [ ] Multithreading/concurrency
+- [x] Multithreading/concurrency (thread pool, async I/O, parallel parsing)
+- [ ] Symbol-sharded matching (multi-symbol parallel processing)
 - [ ] Strategy layer (market making, momentum)
 - [ ] Backtesting framework
 

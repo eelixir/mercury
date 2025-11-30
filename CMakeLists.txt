@@ -6,6 +6,12 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 # ============================================================================
+# THREADING SUPPORT
+# ============================================================================
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+
+# ============================================================================
 # BUILD OPTIONS
 # ============================================================================
 option(MERCURY_ENABLE_ASAN "Enable AddressSanitizer" OFF)
@@ -60,6 +66,7 @@ add_executable(mercury
 
 # Include the src and include directories so headers can be found easily
 target_include_directories(mercury PUBLIC src include)
+target_link_libraries(mercury PRIVATE Threads::Threads)
 
 # Create a library for testable code (excluding main.cpp)
 add_library(mercury_lib
@@ -71,6 +78,7 @@ add_library(mercury_lib
     src/PnLTracker.cpp
 )
 target_include_directories(mercury_lib PUBLIC include)
+target_link_libraries(mercury_lib PUBLIC Threads::Threads)
 
 # Header-only components (listed for IDE visibility)
 set(MERCURY_HEADERS
@@ -87,6 +95,9 @@ set(MERCURY_HEADERS
     include/TradeWriter.h
     include/RiskManager.h
     include/PnLTracker.h
+    include/ThreadPool.h
+    include/AsyncWriter.h
+    include/ConcurrentMatchingEngine.h
 )
 target_sources(mercury_lib PRIVATE ${MERCURY_HEADERS})
 
@@ -112,6 +123,7 @@ add_executable(mercury_tests
     tests/stress_test.cpp
     tests/risk_manager_test.cpp
     tests/pnl_tracker_test.cpp
+    tests/concurrency_test.cpp
 )
 
 target_link_libraries(mercury_tests

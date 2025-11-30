@@ -134,6 +134,72 @@ Mercury uses custom data structures optimized for trading workloads:
 
 ---
 
+## Concurrency Utilities
+
+Mercury includes thread-safe primitives for parallel processing:
+
+### ThreadPool
+- **Location:** `include/ThreadPool.h`
+- **Use:** Task-based parallelism with work stealing
+- **API:** `submit()` returns `std::future`, `waitAll()` for synchronization
+- **Benefits:** Reuses threads, avoids thread creation overhead
+
+### ParallelFor
+- **Location:** `include/ThreadPool.h`
+- **Use:** Data-parallel loops with configurable chunk size
+- **API:** `ParallelFor::run(start, end, func, chunkSize)`
+- **Benefits:** Automatic work distribution across available cores
+
+### SpinLock
+- **Location:** `include/ThreadPool.h`
+- **Use:** Short critical sections where contention is rare
+- **API:** RAII guard via `SpinLockGuard`
+- **Benefits:** Lower overhead than mutex for micro-contention
+
+### AsyncWriter
+- **Location:** `include/AsyncWriter.h`
+- **Use:** Background file I/O with buffering
+- **API:** `write()` queues data, background thread flushes
+- **Benefits:** Decouples I/O latency from processing path
+
+### ConcurrentQueue
+- **Location:** `include/AsyncWriter.h`
+- **Use:** Thread-safe producer/consumer queue
+- **API:** `push()`, `pop()` with blocking, `tryPop()` non-blocking
+- **Benefits:** Bounded size option prevents memory exhaustion
+
+### ConcurrentMatchingEngine
+- **Location:** `include/ConcurrentMatchingEngine.h`
+- **Use:** Thread-safe matching with multiple strategies
+- **Modes:**
+  - `SingleThreaded`: Traditional sequential processing
+  - `SymbolSharded`: Parallel order books per symbol/client
+  - `AsyncCallbacks`: Single-threaded matching, async post-trade
+- **Benefits:** Scales with multi-symbol workloads
+
+### PostTradeProcessor
+- **Location:** `include/ConcurrentMatchingEngine.h`
+- **Use:** Offloads P&L/risk updates to background threads
+- **API:** `processTrade()`, `setTradeHandler()`
+- **Benefits:** Keeps matching engine fast, async post-trade work
+
+---
+
+### Running with Concurrency
+
+```bash
+# Enable parallel CSV parsing and async post-trade processing
+./build/mercury data/sample_orders.csv --concurrent
+
+# Enable async file I/O writers
+./build/mercury data/sample_orders.csv --async-io
+
+# Both options for maximum parallelism
+./build/mercury data/sample_orders.csv --concurrent --async-io
+```
+
+---
+
 ## Built-in Profiler
 
 Mercury includes a lightweight instrumentation profiler for measuring critical path latency.

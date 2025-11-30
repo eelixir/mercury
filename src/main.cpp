@@ -1,13 +1,17 @@
 #include <iostream>
 #include <iomanip>
 #include <chrono>
+#include <thread>
 #include "OrderBook.h" 
 #include "Order.h"
 #include "CSVParser.h"
 #include "MatchingEngine.h"
+#include "ConcurrentMatchingEngine.h"
 #include "TradeWriter.h"
 #include "RiskManager.h"
 #include "PnLTracker.h"
+#include "ThreadPool.h"
+#include "AsyncWriter.h"
 
 // Helper function to convert ExecutionStatus to string
 std::string statusToString(Mercury::ExecutionStatus status) {
@@ -161,19 +165,41 @@ void runDemo() {
 
 int main(int argc, char* argv[]) {
     std::cout << "Initializing Mercury Trading Engine...\n";
+    std::cout << "Hardware concurrency: " << std::thread::hardware_concurrency() << " threads\n";
 
     // Create the matching engine
     Mercury::MatchingEngine engine;
 
     // Check if a CSV file was provided as argument
     if (argc > 1) {
-        std::string inputFile = argv[1];
+        // First, collect all non-flag arguments and flags separately
+        std::vector<std::string> positionalArgs;
+        bool useConcurrency = false;
+        bool useAsyncWriters = false;
         
-        // Determine output file names
-        std::string tradesFile = (argc > 2) ? argv[2] : "trades.csv";
-        std::string reportsFile = (argc > 3) ? argv[3] : "executions.csv";
-        std::string riskEventsFile = (argc > 4) ? argv[4] : "riskevents.csv";
-        std::string pnlFile = (argc > 5) ? argv[5] : "pnl.csv";
+        for (int i = 1; i < argc; ++i) {
+            std::string arg = argv[i];
+            if (arg == "--concurrent" || arg == "-c") {
+                useConcurrency = true;
+            } else if (arg == "--async-io" || arg == "-a") {
+                useAsyncWriters = true;
+            } else if (arg[0] != '-') {
+                positionalArgs.push_back(arg);
+            }
+        }
+        
+        if (positionalArgs.empty()) {
+            std::cerr << "Error: No input file specified\n";
+            return 1;
+        }
+        
+        std::string inputFile = positionalArgs[0];
+        
+        // Determine output file names from positional args
+        std::string tradesFile = (positionalArgs.size() > 1) ? positionalArgs[1] : "trades.csv";
+        std::string reportsFile = (positionalArgs.size() > 2) ? positionalArgs[2] : "executions.csv";
+        std::string riskEventsFile = (positionalArgs.size() > 3) ? positionalArgs[3] : "riskevents.csv";
+        std::string pnlFile = (positionalArgs.size() > 4) ? positionalArgs[4] : "pnl.csv";
 
         std::cout << "\n========================================\n";
         std::cout << "   Mercury File I/O Mode\n";
@@ -183,15 +209,29 @@ int main(int argc, char* argv[]) {
         std::cout << "Executions:  " << reportsFile << "\n";
         std::cout << "Risk Events: " << riskEventsFile << "\n";
         std::cout << "P&L:         " << pnlFile << "\n";
+        std::cout << "Concurrency: " << (useConcurrency ? "Enabled" : "Disabled") << "\n";
+        std::cout << "Async I/O:   " << (useAsyncWriters ? "Enabled" : "Disabled") << "\n";
         std::cout << "========================================\n\n";
 
-        // Parse input orders
+        // Parse input orders (with parallel parsing for large files)
         std::cout << "--- Parsing Orders ---\n";
+        auto parseStartTime = std::chrono::high_resolution_clock::now();
+        
         Mercury::CSVParser parser;
-        auto orders = parser.parseFile(inputFile);
+        std::vector<Mercury::Order> orders;
+        
+        if (useConcurrency) {
+            orders = parser.parseFileParallel(inputFile);
+        } else {
+            orders = parser.parseFile(inputFile);
+        }
+        
+        auto parseEndTime = std::chrono::high_resolution_clock::now();
+        auto parseDuration = std::chrono::duration_cast<std::chrono::microseconds>(parseEndTime - parseStartTime);
 
         std::cout << "Orders parsed: " << orders.size() << "\n";
         std::cout << "Lines processed: " << parser.getLinesProcessed() << "\n";
+        std::cout << "Parse time: " << parseDuration.count() / 1000.0 << " ms\n";
         if (parser.getParseErrorCount() > 0) {
             std::cout << "Parse errors: " << parser.getParseErrorCount() << "\n";
         }
@@ -202,30 +242,54 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        // Set up output writers
+        // Set up output writers (async or sync based on flag)
+        std::unique_ptr<Mercury::AsyncWriter> asyncTradeWriter;
+        std::unique_ptr<Mercury::AsyncWriter> asyncReportWriter;
+        std::unique_ptr<Mercury::AsyncWriter> asyncRiskWriter;
+        std::unique_ptr<Mercury::AsyncWriter> asyncPnlWriter;
+        
         Mercury::TradeWriter tradeWriter(tradesFile);
         Mercury::ExecutionReportWriter reportWriter(reportsFile);
         Mercury::RiskEventWriter riskEventWriter(riskEventsFile);
         Mercury::PnLTracker pnlTracker(pnlFile);
 
-        if (!tradeWriter.open()) {
-            std::cerr << "Error: Could not open trades output file\n";
-            return 1;
-        }
+        if (useAsyncWriters) {
+            asyncTradeWriter = std::make_unique<Mercury::AsyncWriter>(tradesFile);
+            asyncReportWriter = std::make_unique<Mercury::AsyncWriter>(reportsFile);
+            asyncRiskWriter = std::make_unique<Mercury::AsyncWriter>(riskEventsFile);
+            asyncPnlWriter = std::make_unique<Mercury::AsyncWriter>(pnlFile);
+            
+            if (!asyncTradeWriter->open() || !asyncReportWriter->open() ||
+                !asyncRiskWriter->open() || !asyncPnlWriter->open()) {
+                std::cerr << "Error: Could not open async output files\n";
+                return 1;
+            }
+            
+            // Write headers
+            asyncTradeWriter->write("trade_id,timestamp,buy_order_id,sell_order_id,price,quantity\n");
+            asyncReportWriter->write("order_id,timestamp,type,side,status,reject_reason,filled_qty,remaining_qty,trade_count,avg_price\n");
+            asyncRiskWriter->write("event_id,timestamp,order_id,client_id,event_type,current_value,limit_value,requested_value,details\n");
+            asyncPnlWriter->write("snapshot_id,timestamp,client_id,net_position,long_qty,short_qty,realized_pnl,unrealized_pnl,total_pnl,mark_price,cost_basis,avg_entry_price,trade_id\n");
+        } else {
+            if (!tradeWriter.open()) {
+                std::cerr << "Error: Could not open trades output file\n";
+                return 1;
+            }
 
-        if (!reportWriter.open()) {
-            std::cerr << "Error: Could not open executions output file\n";
-            return 1;
-        }
+            if (!reportWriter.open()) {
+                std::cerr << "Error: Could not open executions output file\n";
+                return 1;
+            }
 
-        if (!riskEventWriter.open()) {
-            std::cerr << "Error: Could not open risk events output file\n";
-            return 1;
-        }
+            if (!riskEventWriter.open()) {
+                std::cerr << "Error: Could not open risk events output file\n";
+                return 1;
+            }
 
-        if (!pnlTracker.open()) {
-            std::cerr << "Error: Could not open P&L output file\n";
-            return 1;
+            if (!pnlTracker.open()) {
+                std::cerr << "Error: Could not open P&L output file\n";
+                return 1;
+            }
         }
 
         // Set up risk manager with default limits
@@ -239,48 +303,65 @@ int main(int argc, char* argv[]) {
         limits.maxOpenOrders = 1000;               // Max 1000 open orders
         Mercury::RiskManager riskManager(limits);
 
-        // Set up risk event callback to write events as they occur
-        riskManager.setRiskCallback([&riskEventWriter](const Mercury::RiskEvent& event) {
-            riskEventWriter.writeEvent(event);
-        });
+        // Set up post-trade processor for async processing
+        std::unique_ptr<Mercury::PostTradeProcessor> postTradeProcessor;
+        std::mutex pnlMutex;  // Protect PnLTracker in concurrent mode
+        if (useConcurrency) {
+            postTradeProcessor = std::make_unique<Mercury::PostTradeProcessor>(2);
+            
+            // Set up async trade handler (thread-safe)
+            postTradeProcessor->setTradeHandler(
+                [&pnlTracker, &pnlMutex](const Mercury::Trade& trade, uint64_t buyClientId, uint64_t sellClientId) {
+                    std::lock_guard<std::mutex> lock(pnlMutex);
+                    pnlTracker.onTradeExecuted(trade, buyClientId, sellClientId, trade.price);
+                });
+        }
 
-        // Set up trade callback to write trades as they occur
-        engine.setTradeCallback([&tradeWriter, &pnlTracker](const Mercury::Trade& trade) {
-            tradeWriter.writeTrade(trade);
-        });
+        // Set up risk event callback
+        if (useAsyncWriters) {
+            riskManager.setRiskCallback([&asyncRiskWriter](const Mercury::RiskEvent& event) {
+                std::ostringstream oss;
+                oss << event.eventId << "," << event.timestamp << ","
+                    << event.orderId << "," << event.clientId << ","
+                    << Mercury::riskEventTypeToString(event.eventType) << ","
+                    << event.currentValue << "," << event.limitValue << ","
+                    << event.requestedValue << "," << event.details << "\n";
+                asyncRiskWriter->write(oss.str());
+            });
+        } else {
+            riskManager.setRiskCallback([&riskEventWriter](const Mercury::RiskEvent& event) {
+                riskEventWriter.writeEvent(event);
+            });
+        }
+
+        // Set up trade callback
+        std::atomic<size_t> asyncTradeCount{0};
+        if (useAsyncWriters) {
+            engine.setTradeCallback([&asyncTradeWriter, &asyncTradeCount](const Mercury::Trade& trade) {
+                std::ostringstream oss;
+                oss << trade.tradeId << "," << trade.timestamp << ","
+                    << trade.buyOrderId << "," << trade.sellOrderId << ","
+                    << trade.price << "," << trade.quantity << "\n";
+                asyncTradeWriter->write(oss.str());
+                ++asyncTradeCount;
+            });
+        } else {
+            engine.setTradeCallback([&tradeWriter, &pnlTracker](const Mercury::Trade& trade) {
+                tradeWriter.writeTrade(trade);
+            });
+        }
 
         // Process all orders
         std::cout << "--- Processing Orders ---\n";
         auto startTime = std::chrono::high_resolution_clock::now();
 
-        size_t filled = 0, partialFill = 0, resting = 0;
-        size_t cancelled = 0, modified = 0, rejected = 0;
-        size_t riskRejected = 0;
+        std::atomic<size_t> filled{0}, partialFill{0}, resting{0};
+        std::atomic<size_t> cancelled{0}, modified{0}, rejected{0};
+        std::atomic<size_t> riskRejected{0};
+        std::atomic<size_t> asyncReportCount{0};
 
-        for (const auto& order : orders) {
-            // First perform risk check
-            auto riskEvent = riskManager.checkOrder(order);
-            
-            if (riskEvent.isRejected()) {
-                // Order rejected by risk manager
-                riskRejected++;
-                
-                // Create a rejection result for the execution report
-                Mercury::ExecutionResult result;
-                result.status = Mercury::ExecutionStatus::Rejected;
-                result.rejectReason = Mercury::RejectReason::InternalError;  // Could add RiskReject
-                result.orderId = order.id;
-                result.remainingQuantity = order.quantity;
-                result.message = "Risk check failed: " + riskEvent.details;
-                
-                reportWriter.writeReport(order, result);
-                rejected++;
-                continue;
-            }
-            
-            // Risk check passed, submit to matching engine
-            auto result = engine.submitOrder(order);
-            
+        // Helper lambda for processing execution results
+        auto processResult = [&](const Mercury::Order& order, const Mercury::ExecutionResult& result) {
             // Track order in risk manager if it was added to book
             if (result.status == Mercury::ExecutionStatus::Resting ||
                 result.status == Mercury::ExecutionStatus::PartialFill) {
@@ -290,18 +371,20 @@ int main(int argc, char* argv[]) {
             // Track fills in risk manager
             if (result.hasFills()) {
                 for (const auto& trade : result.trades) {
-                    // For simplicity, use order.clientId for both sides
-                    // In a real system, you'd track the resting order's clientId
                     riskManager.onTradeExecuted(trade, 
                         order.side == Mercury::Side::Buy ? order.clientId : 0,
                         order.side == Mercury::Side::Sell ? order.clientId : 0);
                     
-                    // Track P&L for both sides of the trade
-                    // The aggressive order's client is order.clientId
-                    // For simplicity, we use clientId for the aggressive side
-                    uint64_t buyClientId = order.side == Mercury::Side::Buy ? order.clientId : 0;
-                    uint64_t sellClientId = order.side == Mercury::Side::Sell ? order.clientId : 0;
-                    pnlTracker.onTradeExecuted(trade, buyClientId, sellClientId, trade.price);
+                    // Handle P&L tracking
+                    if (postTradeProcessor) {
+                        uint64_t buyClientId = order.side == Mercury::Side::Buy ? order.clientId : 0;
+                        uint64_t sellClientId = order.side == Mercury::Side::Sell ? order.clientId : 0;
+                        postTradeProcessor->processTrade(trade, buyClientId, sellClientId);
+                    } else if (!useAsyncWriters) {
+                        uint64_t buyClientId = order.side == Mercury::Side::Buy ? order.clientId : 0;
+                        uint64_t sellClientId = order.side == Mercury::Side::Sell ? order.clientId : 0;
+                        pnlTracker.onTradeExecuted(trade, buyClientId, sellClientId, trade.price);
+                    }
                 }
             }
             
@@ -311,45 +394,132 @@ int main(int argc, char* argv[]) {
             }
             
             // Write execution report
-            reportWriter.writeReport(order, result);
+            if (useAsyncWriters) {
+                std::ostringstream oss;
+                double avgPrice = 0.0;
+                if (result.filledQuantity > 0 && !result.trades.empty()) {
+                    int64_t totalValue = 0;
+                    for (const auto& trade : result.trades) {
+                        totalValue += trade.price * static_cast<int64_t>(trade.quantity);
+                    }
+                    avgPrice = static_cast<double>(totalValue) / static_cast<double>(result.filledQuantity);
+                }
+                
+                const char* typeStr = order.orderType == Mercury::OrderType::Market ? "market" :
+                                     order.orderType == Mercury::OrderType::Limit ? "limit" :
+                                     order.orderType == Mercury::OrderType::Cancel ? "cancel" : "modify";
+                const char* sideStr = order.side == Mercury::Side::Buy ? "buy" : "sell";
+                const char* statusStr = result.status == Mercury::ExecutionStatus::Filled ? "filled" :
+                                       result.status == Mercury::ExecutionStatus::PartialFill ? "partial_fill" :
+                                       result.status == Mercury::ExecutionStatus::Resting ? "resting" :
+                                       result.status == Mercury::ExecutionStatus::Cancelled ? "cancelled" :
+                                       result.status == Mercury::ExecutionStatus::Modified ? "modified" : "rejected";
+                
+                oss << order.id << "," << order.timestamp << ","
+                    << typeStr << "," << sideStr << ","
+                    << statusStr << "," << Mercury::rejectReasonToString(result.rejectReason) << ","
+                    << result.filledQuantity << "," << result.remainingQuantity << ","
+                    << result.trades.size() << "," << std::fixed << std::setprecision(2) << avgPrice << "\n";
+                asyncReportWriter->write(oss.str());
+                ++asyncReportCount;
+            } else {
+                reportWriter.writeReport(order, result);
+            }
 
             // Track statistics
             switch (result.status) {
-                case Mercury::ExecutionStatus::Filled: filled++; break;
-                case Mercury::ExecutionStatus::PartialFill: partialFill++; break;
-                case Mercury::ExecutionStatus::Resting: resting++; break;
-                case Mercury::ExecutionStatus::Cancelled: cancelled++; break;
-                case Mercury::ExecutionStatus::Modified: modified++; break;
-                case Mercury::ExecutionStatus::Rejected: rejected++; break;
+                case Mercury::ExecutionStatus::Filled: ++filled; break;
+                case Mercury::ExecutionStatus::PartialFill: ++partialFill; break;
+                case Mercury::ExecutionStatus::Resting: ++resting; break;
+                case Mercury::ExecutionStatus::Cancelled: ++cancelled; break;
+                case Mercury::ExecutionStatus::Modified: ++modified; break;
+                case Mercury::ExecutionStatus::Rejected: ++rejected; break;
             }
+        };
+
+        // Process orders (sequentially - order book requires sequential access)
+        for (const auto& order : orders) {
+            // First perform risk check
+            auto riskEvent = riskManager.checkOrder(order);
+            
+            if (riskEvent.isRejected()) {
+                // Order rejected by risk manager
+                ++riskRejected;
+                
+                // Create a rejection result for the execution report
+                Mercury::ExecutionResult result;
+                result.status = Mercury::ExecutionStatus::Rejected;
+                result.rejectReason = Mercury::RejectReason::InternalError;
+                result.orderId = order.id;
+                result.remainingQuantity = order.quantity;
+                result.message = "Risk check failed: " + riskEvent.details;
+                
+                if (useAsyncWriters) {
+                    std::ostringstream oss;
+                    const char* typeStr = order.orderType == Mercury::OrderType::Market ? "market" :
+                                         order.orderType == Mercury::OrderType::Limit ? "limit" :
+                                         order.orderType == Mercury::OrderType::Cancel ? "cancel" : "modify";
+                    const char* sideStr = order.side == Mercury::Side::Buy ? "buy" : "sell";
+                    
+                    oss << order.id << "," << order.timestamp << ","
+                        << typeStr << "," << sideStr << ","
+                        << "rejected," << Mercury::rejectReasonToString(result.rejectReason) << ","
+                        << "0," << result.remainingQuantity << ","
+                        << "0,0.00\n";
+                    asyncReportWriter->write(oss.str());
+                    ++asyncReportCount;
+                } else {
+                    reportWriter.writeReport(order, result);
+                }
+                ++rejected;
+                continue;
+            }
+            
+            // Risk check passed, submit to matching engine
+            auto result = engine.submitOrder(order);
+            processResult(order, result);
         }
 
         auto endTime = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);
 
+        // Wait for async operations to complete
+        if (postTradeProcessor) {
+            postTradeProcessor->waitAll();
+        }
+
         // Flush and close output files
-        tradeWriter.close();
-        reportWriter.close();
-        riskEventWriter.close();
-        pnlTracker.close();
+        if (useAsyncWriters) {
+            asyncTradeWriter->close();
+            asyncReportWriter->close();
+            asyncRiskWriter->close();
+            asyncPnlWriter->close();
+        } else {
+            tradeWriter.close();
+            reportWriter.close();
+            riskEventWriter.close();
+            pnlTracker.close();
+        }
 
         // Print summary
         std::cout << "\n========================================\n";
         std::cout << "           Processing Complete\n";
         std::cout << "========================================\n";
-        std::cout << "Time elapsed: " << duration.count() / 1000.0 << " ms\n";
-        std::cout << "Throughput: " << (orders.size() * 1000000.0 / duration.count()) << " orders/sec\n";
+        std::cout << "Parse time:    " << parseDuration.count() / 1000.0 << " ms\n";
+        std::cout << "Process time:  " << duration.count() / 1000.0 << " ms\n";
+        std::cout << "Total time:    " << (parseDuration.count() + duration.count()) / 1000.0 << " ms\n";
+        std::cout << "Throughput:    " << (orders.size() * 1000000.0 / duration.count()) << " orders/sec\n";
         std::cout << "\n--- Order Status Summary ---\n";
-        std::cout << "  Filled:       " << filled << "\n";
-        std::cout << "  Partial Fill: " << partialFill << "\n";
-        std::cout << "  Resting:      " << resting << "\n";
-        std::cout << "  Cancelled:    " << cancelled << "\n";
-        std::cout << "  Modified:     " << modified << "\n";
-        std::cout << "  Rejected:     " << rejected << "\n";
+        std::cout << "  Filled:       " << filled.load() << "\n";
+        std::cout << "  Partial Fill: " << partialFill.load() << "\n";
+        std::cout << "  Resting:      " << resting.load() << "\n";
+        std::cout << "  Cancelled:    " << cancelled.load() << "\n";
+        std::cout << "  Modified:     " << modified.load() << "\n";
+        std::cout << "  Rejected:     " << rejected.load() << "\n";
         std::cout << "\n--- Risk Manager Statistics ---\n";
         std::cout << "  Risk Checks:  " << riskManager.getTotalChecks() << "\n";
         std::cout << "  Approved:     " << riskManager.getApprovedCount() << "\n";
-        std::cout << "  Risk Rejected:" << riskRejected << "\n";
+        std::cout << "  Risk Rejected:" << riskRejected.load() << "\n";
         std::cout << "  Clients:      " << riskManager.getClientCount() << "\n";
         std::cout << "\n--- Trading Statistics ---\n";
         std::cout << "  Total Trades: " << engine.getTradeCount() << "\n";
@@ -359,19 +529,24 @@ int main(int argc, char* argv[]) {
         std::cout << "  Bid Levels: " << engine.getOrderBook().getBidLevelCount() << "\n";
         std::cout << "  Ask Levels: " << engine.getOrderBook().getAskLevelCount() << "\n";
         std::cout << "\n--- Output Files ---\n";
-        std::cout << "  Trades written: " << tradeWriter.getTradeCount() << " -> " << tradesFile << "\n";
-        std::cout << "  Reports written: " << reportWriter.getReportCount() << " -> " << reportsFile << "\n";
-        std::cout << "  Risk events:    " << riskEventWriter.getEventCount() << " -> " << riskEventsFile << "\n";
-        std::cout << "  P&L snapshots:  " << pnlTracker.getSnapshotCount() << " -> " << pnlFile << "\n";
-        std::cout << "\n--- P&L Summary ---\n";
-        std::cout << "  Clients tracked: " << pnlTracker.getClientCount() << "\n";
-        for (const auto& [clientId, pnl] : pnlTracker.getAllClientPnL()) {
-            if (clientId > 0) {
-                std::cout << "  Client " << clientId << ": "
-                          << "Net Pos=" << pnl.netPosition 
-                          << ", Realized=" << pnl.realizedPnL 
-                          << ", Unrealized=" << pnl.unrealizedPnL 
-                          << ", Total=" << pnl.totalPnL << "\n";
+        if (useAsyncWriters) {
+            std::cout << "  Trades written: " << asyncTradeCount.load() << " -> " << tradesFile << "\n";
+            std::cout << "  Reports written: " << asyncReportCount.load() << " -> " << reportsFile << "\n";
+        } else {
+            std::cout << "  Trades written: " << tradeWriter.getTradeCount() << " -> " << tradesFile << "\n";
+            std::cout << "  Reports written: " << reportWriter.getReportCount() << " -> " << reportsFile << "\n";
+            std::cout << "  Risk events:    " << riskEventWriter.getEventCount() << " -> " << riskEventsFile << "\n";
+            std::cout << "  P&L snapshots:  " << pnlTracker.getSnapshotCount() << " -> " << pnlFile << "\n";
+            std::cout << "\n--- P&L Summary ---\n";
+            std::cout << "  Clients tracked: " << pnlTracker.getClientCount() << "\n";
+            for (const auto& [clientId, pnl] : pnlTracker.getAllClientPnL()) {
+                if (clientId > 0) {
+                    std::cout << "  Client " << clientId << ": "
+                              << "Net Pos=" << pnl.netPosition 
+                              << ", Realized=" << pnl.realizedPnL 
+                              << ", Unrealized=" << pnl.unrealizedPnL 
+                              << ", Total=" << pnl.totalPnL << "\n";
+                }
             }
         }
         std::cout << "========================================\n";
@@ -384,12 +559,15 @@ int main(int argc, char* argv[]) {
         }
     } else {
         // Run interactive demo
-        std::cout << "\nUsage: mercury <orders.csv> [trades.csv] [executions.csv] [riskevents.csv] [pnl.csv]\n";
+        std::cout << "\nUsage: mercury <orders.csv> [trades.csv] [executions.csv] [riskevents.csv] [pnl.csv] [options]\n";
         std::cout << "  orders.csv     - Input file with orders to process\n";
         std::cout << "  trades.csv     - Output file for trade results (default: trades.csv)\n";
         std::cout << "  executions.csv - Output file for execution reports (default: executions.csv)\n";
         std::cout << "  riskevents.csv - Output file for risk events (default: riskevents.csv)\n";
         std::cout << "  pnl.csv        - Output file for P&L snapshots (default: pnl.csv)\n\n";
+        std::cout << "Options:\n";
+        std::cout << "  --concurrent, -c   Enable concurrent parsing and post-trade processing\n";
+        std::cout << "  --async-io, -a     Enable asynchronous I/O writers\n\n";
         runDemo();
     }
 
