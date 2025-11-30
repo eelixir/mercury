@@ -185,24 +185,33 @@ Async I/O:   Disabled
 
 Processing Complete
 ----------------------------------------
-Parse time:    1.03 ms
-Process time:  0.54 ms
-Total time:    1.57 ms
-Throughput:    92251 orders/sec
+Parse time:    1.07 ms
+Process time:  0.82 ms
+Total time:    1.89 ms
+Throughput:    91799 orders/sec
+
+Order Status Summary:
+  Filled: 24, Partial Fill: 7, Resting: 34
+  Cancelled: 5, Rejected: 5
 
 Risk Manager Statistics:
-  Risk Checks:  50
-  Approved:     48
-  Risk Rejected: 2
-  Clients:      5
+  Risk Checks:  75
+  Approved:     75
+  Clients:      10
 
-P&L Summary:
-  Clients tracked: 4
-  Client 1: Net Pos=150, Realized=0, Unrealized=11515, Total=11515
-  Client 2: Net Pos=-420, Realized=2245, Unrealized=0, Total=2245
+P&L Summary (per client):
+  Client 1:  Net Pos=-85,   Total P&L=+4,250  (winner)
+  Client 8:  Net Pos=+20,   Total P&L=0       (breakeven)
+  Client 9:  Net Pos=+40,   Total P&L=-205    (small loss)
+  Client 10: Net Pos=+75,   Total P&L=-535    (loss)
+  Client 6:  Net Pos=+65,   Total P&L=-600    (loss)
+  Client 4:  Net Pos=-1185, Total P&L=-4,405  (big short loss)
+  Client 5:  Net Pos=+80,   Total P&L=-4,500  (loss)
+  Client 3:  Net Pos=+100,  Total P&L=-10,075 (big loss)
+  Client 7:  Net Pos=+70,   Total P&L=-29,950 (worst performer)
 
-Total Trades: 24
-Total Volume: 1188 units
+Total Trades: 53
+Total Volume: 2660 units
 ```
 
 ## Performance
