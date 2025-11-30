@@ -1,9 +1,11 @@
 #include <iostream>
 #include <iomanip>
+#include <chrono>
 #include "OrderBook.h" 
 #include "Order.h"
 #include "CSVParser.h"
 #include "MatchingEngine.h"
+#include "TradeWriter.h"
 
 // Helper function to convert ExecutionStatus to string
 std::string statusToString(Mercury::ExecutionStatus status) {
@@ -163,37 +165,124 @@ int main(int argc, char* argv[]) {
 
     // Check if a CSV file was provided as argument
     if (argc > 1) {
-        std::cout << "\n--- Loading orders from CSV file ---\n";
+        std::string inputFile = argv[1];
+        
+        // Determine output file names
+        std::string tradesFile = (argc > 2) ? argv[2] : "trades.csv";
+        std::string reportsFile = (argc > 3) ? argv[3] : "executions.csv";
+
+        std::cout << "\n========================================\n";
+        std::cout << "   Mercury File I/O Mode\n";
+        std::cout << "========================================\n";
+        std::cout << "Input:       " << inputFile << "\n";
+        std::cout << "Trades:      " << tradesFile << "\n";
+        std::cout << "Executions:  " << reportsFile << "\n";
+        std::cout << "========================================\n\n";
+
+        // Parse input orders
+        std::cout << "--- Parsing Orders ---\n";
         Mercury::CSVParser parser;
-        auto orders = parser.parseFile(argv[1]);
+        auto orders = parser.parseFile(inputFile);
 
-        std::cout << "Parsed " << orders.size() << " orders from file\n";
+        std::cout << "Orders parsed: " << orders.size() << "\n";
         std::cout << "Lines processed: " << parser.getLinesProcessed() << "\n";
-        std::cout << "Parse errors: " << parser.getParseErrorCount() << "\n\n";
+        if (parser.getParseErrorCount() > 0) {
+            std::cout << "Parse errors: " << parser.getParseErrorCount() << "\n";
+        }
+        std::cout << "\n";
 
-        // Set up trade callback
-        engine.setTradeCallback([](const Mercury::Trade& trade) {
-            std::cout << "TRADE: ID=" << trade.tradeId 
-                      << " Price=" << trade.price 
-                      << " Qty=" << trade.quantity << "\n";
-        });
-
-        // Process all orders through the matching engine
-        for (const auto& order : orders) {
-            auto result = engine.submitOrder(order);
-            std::cout << "Order #" << order.id << ": " 
-                      << statusToString(result.status) << "\n";
+        if (orders.empty()) {
+            std::cerr << "Error: No valid orders to process\n";
+            return 1;
         }
 
-        std::cout << "\nFinal Order Book State:\n";
-        engine.getOrderBook().printBook();
+        // Set up output writers
+        Mercury::TradeWriter tradeWriter(tradesFile);
+        Mercury::ExecutionReportWriter reportWriter(reportsFile);
 
-        std::cout << "\nStatistics:\n";
-        std::cout << "Total Trades: " << engine.getTradeCount() << "\n";
-        std::cout << "Total Volume: " << engine.getTotalVolume() << "\n";
+        if (!tradeWriter.open()) {
+            std::cerr << "Error: Could not open trades output file\n";
+            return 1;
+        }
+
+        if (!reportWriter.open()) {
+            std::cerr << "Error: Could not open executions output file\n";
+            return 1;
+        }
+
+        // Set up trade callback to write trades as they occur
+        engine.setTradeCallback([&tradeWriter](const Mercury::Trade& trade) {
+            tradeWriter.writeTrade(trade);
+        });
+
+        // Process all orders
+        std::cout << "--- Processing Orders ---\n";
+        auto startTime = std::chrono::high_resolution_clock::now();
+
+        size_t filled = 0, partialFill = 0, resting = 0;
+        size_t cancelled = 0, modified = 0, rejected = 0;
+
+        for (const auto& order : orders) {
+            auto result = engine.submitOrder(order);
+            
+            // Write execution report
+            reportWriter.writeReport(order, result);
+
+            // Track statistics
+            switch (result.status) {
+                case Mercury::ExecutionStatus::Filled: filled++; break;
+                case Mercury::ExecutionStatus::PartialFill: partialFill++; break;
+                case Mercury::ExecutionStatus::Resting: resting++; break;
+                case Mercury::ExecutionStatus::Cancelled: cancelled++; break;
+                case Mercury::ExecutionStatus::Modified: modified++; break;
+                case Mercury::ExecutionStatus::Rejected: rejected++; break;
+            }
+        }
+
+        auto endTime = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);
+
+        // Flush and close output files
+        tradeWriter.close();
+        reportWriter.close();
+
+        // Print summary
+        std::cout << "\n========================================\n";
+        std::cout << "           Processing Complete\n";
+        std::cout << "========================================\n";
+        std::cout << "Time elapsed: " << duration.count() / 1000.0 << " ms\n";
+        std::cout << "Throughput: " << (orders.size() * 1000000.0 / duration.count()) << " orders/sec\n";
+        std::cout << "\n--- Order Status Summary ---\n";
+        std::cout << "  Filled:       " << filled << "\n";
+        std::cout << "  Partial Fill: " << partialFill << "\n";
+        std::cout << "  Resting:      " << resting << "\n";
+        std::cout << "  Cancelled:    " << cancelled << "\n";
+        std::cout << "  Modified:     " << modified << "\n";
+        std::cout << "  Rejected:     " << rejected << "\n";
+        std::cout << "\n--- Trading Statistics ---\n";
+        std::cout << "  Total Trades: " << engine.getTradeCount() << "\n";
+        std::cout << "  Total Volume: " << engine.getTotalVolume() << " units\n";
+        std::cout << "\n--- Order Book State ---\n";
+        std::cout << "  Orders in Book: " << engine.getOrderBook().getOrderCount() << "\n";
+        std::cout << "  Bid Levels: " << engine.getOrderBook().getBidLevelCount() << "\n";
+        std::cout << "  Ask Levels: " << engine.getOrderBook().getAskLevelCount() << "\n";
+        std::cout << "\n--- Output Files ---\n";
+        std::cout << "  Trades written: " << tradeWriter.getTradeCount() << " -> " << tradesFile << "\n";
+        std::cout << "  Reports written: " << reportWriter.getReportCount() << " -> " << reportsFile << "\n";
+        std::cout << "========================================\n";
+
+        // Optionally print final order book
+        if (engine.getOrderBook().getOrderCount() > 0 && 
+            engine.getOrderBook().getOrderCount() <= 20) {
+            std::cout << "\nFinal Order Book:\n";
+            engine.getOrderBook().printBook();
+        }
     } else {
         // Run interactive demo
-        std::cout << "\nUsage: mercury <orders.csv>\n";
+        std::cout << "\nUsage: mercury <orders.csv> [trades.csv] [executions.csv]\n";
+        std::cout << "  orders.csv     - Input file with orders to process\n";
+        std::cout << "  trades.csv     - Output file for trade results (default: trades.csv)\n";
+        std::cout << "  executions.csv - Output file for execution reports (default: executions.csv)\n\n";
         runDemo();
     }
 
