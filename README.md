@@ -9,7 +9,7 @@
 - [x] matching engine (limit/market cancel/modify): implement the full engine logic, including limit orders, market orders, cancels, and modifications
 - [x] implement custom data structures (linked list, hash map): required for eventual optimization, but practice is done here
 - [x] handle edge cases (partial fills, empty book, invalid orders): integrate robust error handling for critical scenarios
-- [ ] unit tests for correctness & stress testing with sample datasets: validate the entire matching engine with thorough test coverage
+- [x] unit tests for correctness & stress testing with sample datasets: validate the entire matching engine with thorough test coverage
 - [ ] file i/o: read orders from csv, output trades to file: complete the data flow by ingesting orders and outputting trade results
 - [ ] trade logger (csv output): log all executed trades to the required trades.csv file
 - [ ] profile code with valgrind/gprof: identify bottlenecks and memory issues before optimization

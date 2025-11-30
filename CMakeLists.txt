@@ -44,8 +44,10 @@ enable_testing()
 # Add test executable
 add_executable(mercury_tests
     tests/data_structures_test.cpp
+    tests/matching_engine_test.cpp
     tests/order_book_test.cpp
     tests/order_validation_test.cpp
+    tests/stress_test.cpp
 )
 
 target_link_libraries(mercury_tests

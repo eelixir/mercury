@@ -311,6 +311,10 @@ namespace Mercury {
                 uint64_t filledQty = matchAtPriceLevel(order, bestAsk, trades);
                 if (filledQty > 0) {
                     matched = true;
+                } else {
+                    // No fills at this level (e.g., all orders blocked by self-trade prevention)
+                    // Must break to avoid infinite loop
+                    break;
                 }
             }
         } else {
@@ -326,6 +330,10 @@ namespace Mercury {
                 uint64_t filledQty = matchAtPriceLevel(order, bestBid, trades);
                 if (filledQty > 0) {
                     matched = true;
+                } else {
+                    // No fills at this level (e.g., all orders blocked by self-trade prevention)
+                    // Must break to avoid infinite loop
+                    break;
                 }
             }
         }
