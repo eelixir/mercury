@@ -5,6 +5,41 @@ project(Mercury VERSION 1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
+# ============================================================================
+# BUILD OPTIONS
+# ============================================================================
+option(MERCURY_ENABLE_ASAN "Enable AddressSanitizer" OFF)
+option(MERCURY_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
+option(MERCURY_ENABLE_PROFILING "Enable built-in profiling instrumentation" OFF)
+option(MERCURY_BUILD_BENCHMARKS "Build Google Benchmark micro-benchmarks" OFF)
+
+# ============================================================================
+# COMPILER FLAGS
+# ============================================================================
+
+# Release with debug info for profiling
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG")
+
+# AddressSanitizer - detects memory errors (use-after-free, buffer overflow)
+if(MERCURY_ENABLE_ASAN)
+    message(STATUS "AddressSanitizer enabled")
+    add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address)
+endif()
+
+# UndefinedBehaviorSanitizer - detects undefined behavior
+if(MERCURY_ENABLE_UBSAN)
+    message(STATUS "UndefinedBehaviorSanitizer enabled")
+    add_compile_options(-fsanitize=undefined)
+    add_link_options(-fsanitize=undefined)
+endif()
+
+# Built-in profiling instrumentation
+if(MERCURY_ENABLE_PROFILING)
+    message(STATUS "Built-in profiling enabled")
+    add_compile_definitions(MERCURY_PROFILING_ENABLED=1)
+endif()
+
 # Add the main executable
 add_executable(mercury
     src/main.cpp
@@ -60,3 +95,32 @@ target_link_libraries(mercury_tests
 
 include(GoogleTest)
 gtest_discover_tests(mercury_tests)
+
+# ============================================================================
+# GOOGLE BENCHMARK (Micro-benchmarking)
+# ============================================================================
+if(MERCURY_BUILD_BENCHMARKS)
+    message(STATUS "Building micro-benchmarks")
+    
+    FetchContent_Declare(
+        googlebenchmark
+        GIT_REPOSITORY https://github.com/google/benchmark.git
+        GIT_TAG        v1.9.1
+    )
+    
+    set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+    set(BENCHMARK_ENABLE_GTEST_TESTS OFF CACHE BOOL "" FORCE)
+    set(BENCHMARK_ENABLE_WERROR OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googlebenchmark)
+    
+    add_executable(mercury_benchmarks
+        benchmarks/benchmark_main.cpp
+    )
+    
+    target_link_libraries(mercury_benchmarks
+        mercury_lib
+        benchmark::benchmark
+    )
+    
+    target_include_directories(mercury_benchmarks PRIVATE include)
+endif()
