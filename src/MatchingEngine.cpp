@@ -1,4 +1,5 @@
 #include "MatchingEngine.h"
+#include "PriceLevel.h"
 #include <algorithm>
 #include <iostream>
 #include <limits>
@@ -345,22 +346,44 @@ namespace Mercury {
                                                 std::vector<Trade>& trades) {
         uint64_t totalFilled = 0;
 
-        // Get orders at this price level
-        auto ordersAtLevel = orderBook_.getOrdersAtPrice(priceLevel, 
-            order.side == Side::Buy ? Side::Sell : Side::Buy);
+        // Get the price level directly for efficient iteration
+        PriceLevel* level = nullptr;
+        if (order.side == Side::Buy) {
+            level = orderBook_.getAskLevel(priceLevel);
+        } else {
+            level = orderBook_.getBidLevel(priceLevel);
+        }
 
         // Edge case: empty price level (shouldn't happen but be safe)
-        if (ordersAtLevel.empty()) {
+        if (!level || level->empty()) {
             return 0;
         }
 
-        for (const auto& restingOrder : ordersAtLevel) {
+        // Collect order IDs to process (we can't modify list while iterating)
+        // Using a small vector to avoid allocations for typical cases
+        std::vector<uint64_t> ordersToProcess;
+        ordersToProcess.reserve(std::min(level->size(), size_t(32)));
+
+        for (const auto& restingNode : *level) {
+            if (order.quantity == 0) break;
+            
+            // Self-trade prevention: skip if same client ID
+            if (order.clientId != 0 && order.clientId == restingNode.clientId) {
+                continue;
+            }
+            
+            ordersToProcess.push_back(restingNode.id);
+        }
+
+        // Now process the collected orders
+        for (uint64_t restingOrderId : ordersToProcess) {
             if (order.quantity == 0) break;
 
-            // Self-trade prevention: skip if same client ID
-            if (order.clientId != 0 && order.clientId == restingOrder.clientId) {
-                continue;  // Skip this order to prevent self-trade
-            }
+            // Re-fetch the order (it may have been partially filled)
+            auto restingOrderOpt = orderBook_.getOrder(restingOrderId);
+            if (!restingOrderOpt) continue;  // Order was removed
+
+            const Order& restingOrder = *restingOrderOpt;
 
             // Calculate fill quantity (with overflow protection)
             uint64_t fillQty = std::min(order.quantity, restingOrder.quantity);
@@ -446,14 +469,14 @@ namespace Mercury {
             }
             
             const auto& askLevels = orderBook_.getAskLevels();
-            for (const auto& [price, orders] : askLevels) {
+            for (const auto& [price, level] : askLevels) {
                 if (!isPriceAcceptable(order, price)) break;
                 
-                for (const auto& o : orders) {
-                    if (remainingQty <= o.quantity) {
+                for (const auto& node : level) {
+                    if (remainingQty <= node.quantity) {
                         return true;  // Can fill completely
                     }
-                    remainingQty -= o.quantity;
+                    remainingQty -= node.quantity;
                 }
             }
         } else {
@@ -463,14 +486,14 @@ namespace Mercury {
             }
             
             const auto& bidLevels = orderBook_.getBidLevels();
-            for (const auto& [price, orders] : bidLevels) {
+            for (const auto& [price, level] : bidLevels) {
                 if (!isPriceAcceptable(order, price)) break;
                 
-                for (const auto& o : orders) {
-                    if (remainingQty <= o.quantity) {
+                for (const auto& node : level) {
+                    if (remainingQty <= node.quantity) {
                         return true;  // Can fill completely
                     }
-                    remainingQty -= o.quantity;
+                    remainingQty -= node.quantity;
                 }
             }
         }

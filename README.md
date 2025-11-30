@@ -13,8 +13,8 @@
 - [x] file i/o: read orders from csv, output trades to file: complete the data flow by ingesting orders and outputting trade results
 - [x] trade logger (csv output): log all executed trades to the required trades.csv file
 - [x] profiling infrastructure (sanitizers, benchmarks, instrumentation): AddressSanitizer, UBSan, Google Benchmark, custom profiler
-- [ ] replace stl containers with custom data structures for speed: swap out std::map/std::multimap for custom, optimized structures (e.g., hash map)
-- [ ] cache-friendly design (contiguous memory, pre-allocation): implement memory optimizations for improved performance
+- [x] custom data structures replacing STL: HashMap (Robin Hood), IntrusiveList, ObjectPool for O(1) operations
+- [x] cache-friendly design (contiguous memory, pre-allocation): ObjectPool pre-allocates orders, intrusive lists avoid pointer chasing
 - [ ] risk manager (limits/checks exposures): add the risk layer to enforce position limits and exposures, outputting to riskevents.csv
 - [ ] pnl module (realized + unrealized): implement position and profit/loss tracking, outputting to pnl.csv
 - [ ] basic multithreading/concurrency: introduce concurrency where appropriate for further speed improvements

@@ -66,6 +66,22 @@ add_library(mercury_lib
 )
 target_include_directories(mercury_lib PUBLIC include)
 
+# Header-only components (listed for IDE visibility)
+set(MERCURY_HEADERS
+    include/Order.h
+    include/OrderBook.h
+    include/OrderNode.h
+    include/PriceLevel.h
+    include/HashMap.h
+    include/IntrusiveList.h
+    include/ObjectPool.h
+    include/Profiler.h
+    include/CSVParser.h
+    include/MatchingEngine.h
+    include/TradeWriter.h
+)
+target_sources(mercury_lib PRIVATE ${MERCURY_HEADERS})
+
 # Google Test setup - fetch from GitHub
 include(FetchContent)
 FetchContent_Declare(
