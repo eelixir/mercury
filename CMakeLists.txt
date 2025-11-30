@@ -47,11 +47,13 @@ add_executable(mercury
     src/CSVParser.cpp
     src/MatchingEngine.cpp
     src/TradeWriter.cpp
+    src/RiskManager.cpp
     include/OrderBook.h
     include/Order.h
     include/CSVParser.h
     include/MatchingEngine.h
     include/TradeWriter.h
+    include/RiskManager.h
 )
 
 # Include the src and include directories so headers can be found easily
@@ -63,6 +65,7 @@ add_library(mercury_lib
     src/CSVParser.cpp
     src/MatchingEngine.cpp
     src/TradeWriter.cpp
+    src/RiskManager.cpp
 )
 target_include_directories(mercury_lib PUBLIC include)
 
@@ -79,6 +82,7 @@ set(MERCURY_HEADERS
     include/CSVParser.h
     include/MatchingEngine.h
     include/TradeWriter.h
+    include/RiskManager.h
 )
 target_sources(mercury_lib PRIVATE ${MERCURY_HEADERS})
 
@@ -102,6 +106,7 @@ add_executable(mercury_tests
     tests/order_book_test.cpp
     tests/order_validation_test.cpp
     tests/stress_test.cpp
+    tests/risk_manager_test.cpp
 )
 
 target_link_libraries(mercury_tests

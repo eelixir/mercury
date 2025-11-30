@@ -6,6 +6,7 @@
 #include "CSVParser.h"
 #include "MatchingEngine.h"
 #include "TradeWriter.h"
+#include "RiskManager.h"
 
 // Helper function to convert ExecutionStatus to string
 std::string statusToString(Mercury::ExecutionStatus status) {
@@ -170,6 +171,7 @@ int main(int argc, char* argv[]) {
         // Determine output file names
         std::string tradesFile = (argc > 2) ? argv[2] : "trades.csv";
         std::string reportsFile = (argc > 3) ? argv[3] : "executions.csv";
+        std::string riskEventsFile = (argc > 4) ? argv[4] : "riskevents.csv";
 
         std::cout << "\n========================================\n";
         std::cout << "   Mercury File I/O Mode\n";
@@ -177,6 +179,7 @@ int main(int argc, char* argv[]) {
         std::cout << "Input:       " << inputFile << "\n";
         std::cout << "Trades:      " << tradesFile << "\n";
         std::cout << "Executions:  " << reportsFile << "\n";
+        std::cout << "Risk Events: " << riskEventsFile << "\n";
         std::cout << "========================================\n\n";
 
         // Parse input orders
@@ -199,6 +202,7 @@ int main(int argc, char* argv[]) {
         // Set up output writers
         Mercury::TradeWriter tradeWriter(tradesFile);
         Mercury::ExecutionReportWriter reportWriter(reportsFile);
+        Mercury::RiskEventWriter riskEventWriter(riskEventsFile);
 
         if (!tradeWriter.open()) {
             std::cerr << "Error: Could not open trades output file\n";
@@ -209,6 +213,27 @@ int main(int argc, char* argv[]) {
             std::cerr << "Error: Could not open executions output file\n";
             return 1;
         }
+
+        if (!riskEventWriter.open()) {
+            std::cerr << "Error: Could not open risk events output file\n";
+            return 1;
+        }
+
+        // Set up risk manager with default limits
+        Mercury::RiskLimits limits;
+        limits.maxPositionQuantity = 100000;       // Max 100K net position
+        limits.maxGrossExposure = 1000000000;      // Max 1B gross exposure
+        limits.maxNetExposure = 500000000;         // Max 500M net exposure
+        limits.maxDailyLoss = -100000000;          // Max 100M daily loss
+        limits.maxOrderValue = 10000000;           // Max 10M per order
+        limits.maxOrderQuantity = 10000;           // Max 10K quantity per order
+        limits.maxOpenOrders = 1000;               // Max 1000 open orders
+        Mercury::RiskManager riskManager(limits);
+
+        // Set up risk event callback to write events as they occur
+        riskManager.setRiskCallback([&riskEventWriter](const Mercury::RiskEvent& event) {
+            riskEventWriter.writeEvent(event);
+        });
 
         // Set up trade callback to write trades as they occur
         engine.setTradeCallback([&tradeWriter](const Mercury::Trade& trade) {
@@ -221,9 +246,53 @@ int main(int argc, char* argv[]) {
 
         size_t filled = 0, partialFill = 0, resting = 0;
         size_t cancelled = 0, modified = 0, rejected = 0;
+        size_t riskRejected = 0;
 
         for (const auto& order : orders) {
+            // First perform risk check
+            auto riskEvent = riskManager.checkOrder(order);
+            
+            if (riskEvent.isRejected()) {
+                // Order rejected by risk manager
+                riskRejected++;
+                
+                // Create a rejection result for the execution report
+                Mercury::ExecutionResult result;
+                result.status = Mercury::ExecutionStatus::Rejected;
+                result.rejectReason = Mercury::RejectReason::InternalError;  // Could add RiskReject
+                result.orderId = order.id;
+                result.remainingQuantity = order.quantity;
+                result.message = "Risk check failed: " + riskEvent.details;
+                
+                reportWriter.writeReport(order, result);
+                rejected++;
+                continue;
+            }
+            
+            // Risk check passed, submit to matching engine
             auto result = engine.submitOrder(order);
+            
+            // Track order in risk manager if it was added to book
+            if (result.status == Mercury::ExecutionStatus::Resting ||
+                result.status == Mercury::ExecutionStatus::PartialFill) {
+                riskManager.onOrderAdded(order);
+            }
+            
+            // Track fills in risk manager
+            if (result.hasFills()) {
+                for (const auto& trade : result.trades) {
+                    // For simplicity, use order.clientId for both sides
+                    // In a real system, you'd track the resting order's clientId
+                    riskManager.onTradeExecuted(trade, 
+                        order.side == Mercury::Side::Buy ? order.clientId : 0,
+                        order.side == Mercury::Side::Sell ? order.clientId : 0);
+                }
+            }
+            
+            // Track cancelled orders
+            if (result.status == Mercury::ExecutionStatus::Cancelled) {
+                riskManager.onOrderRemoved(order);
+            }
             
             // Write execution report
             reportWriter.writeReport(order, result);
@@ -245,6 +314,7 @@ int main(int argc, char* argv[]) {
         // Flush and close output files
         tradeWriter.close();
         reportWriter.close();
+        riskEventWriter.close();
 
         // Print summary
         std::cout << "\n========================================\n";
@@ -259,6 +329,11 @@ int main(int argc, char* argv[]) {
         std::cout << "  Cancelled:    " << cancelled << "\n";
         std::cout << "  Modified:     " << modified << "\n";
         std::cout << "  Rejected:     " << rejected << "\n";
+        std::cout << "\n--- Risk Manager Statistics ---\n";
+        std::cout << "  Risk Checks:  " << riskManager.getTotalChecks() << "\n";
+        std::cout << "  Approved:     " << riskManager.getApprovedCount() << "\n";
+        std::cout << "  Risk Rejected:" << riskRejected << "\n";
+        std::cout << "  Clients:      " << riskManager.getClientCount() << "\n";
         std::cout << "\n--- Trading Statistics ---\n";
         std::cout << "  Total Trades: " << engine.getTradeCount() << "\n";
         std::cout << "  Total Volume: " << engine.getTotalVolume() << " units\n";
@@ -269,6 +344,7 @@ int main(int argc, char* argv[]) {
         std::cout << "\n--- Output Files ---\n";
         std::cout << "  Trades written: " << tradeWriter.getTradeCount() << " -> " << tradesFile << "\n";
         std::cout << "  Reports written: " << reportWriter.getReportCount() << " -> " << reportsFile << "\n";
+        std::cout << "  Risk events:    " << riskEventWriter.getEventCount() << " -> " << riskEventsFile << "\n";
         std::cout << "========================================\n";
 
         // Optionally print final order book
@@ -279,10 +355,11 @@ int main(int argc, char* argv[]) {
         }
     } else {
         // Run interactive demo
-        std::cout << "\nUsage: mercury <orders.csv> [trades.csv] [executions.csv]\n";
+        std::cout << "\nUsage: mercury <orders.csv> [trades.csv] [executions.csv] [riskevents.csv]\n";
         std::cout << "  orders.csv     - Input file with orders to process\n";
         std::cout << "  trades.csv     - Output file for trade results (default: trades.csv)\n";
-        std::cout << "  executions.csv - Output file for execution reports (default: executions.csv)\n\n";
+        std::cout << "  executions.csv - Output file for execution reports (default: executions.csv)\n";
+        std::cout << "  riskevents.csv - Output file for risk events (default: riskevents.csv)\n\n";
         runDemo();
     }
 
