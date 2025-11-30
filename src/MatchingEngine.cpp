@@ -1,6 +1,7 @@
 #include "MatchingEngine.h"
 #include <algorithm>
 #include <iostream>
+#include <limits>
 
 namespace Mercury {
 
@@ -12,14 +13,21 @@ namespace Mercury {
             order.timestamp = getTimestamp();
         }
 
-        // Validate order
-        if (!order.isValid()) {
-            ExecutionResult result;
-            result.status = ExecutionStatus::Rejected;
-            result.orderId = order.id;
-            result.message = "Invalid order";
+        // Comprehensive validation with specific reject reason
+        RejectReason rejectReason = order.validate();
+        if (rejectReason != RejectReason::None) {
+            auto result = ExecutionResult::makeRejection(order.id, rejectReason);
             notifyExecution(result);
             return result;
+        }
+
+        // Check for duplicate order ID (for new orders, not cancel/modify)
+        if (order.orderType == OrderType::Limit || order.orderType == OrderType::Market) {
+            if (orderBook_.getOrder(order.id).has_value()) {
+                auto result = ExecutionResult::makeRejection(order.id, RejectReason::DuplicateOrderId);
+                notifyExecution(result);
+                return result;
+            }
         }
 
         ExecutionResult result;
@@ -38,9 +46,7 @@ namespace Mercury {
                 result = processModifyOrder(order);
                 break;
             default:
-                result.status = ExecutionStatus::Rejected;
-                result.orderId = order.id;
-                result.message = "Unknown order type";
+                result = ExecutionResult::makeRejection(order.id, RejectReason::InvalidOrderType);
                 break;
         }
 
@@ -52,39 +58,42 @@ namespace Mercury {
         ExecutionResult result;
         result.orderId = order.id;
 
+        // Edge case: zero quantity after previous partial fills
+        if (order.quantity == 0) {
+            return ExecutionResult::makeRejection(order.id, RejectReason::InvalidQuantity);
+        }
+
         // Handle FOK (Fill-or-Kill): Check if we can fill completely
         if (order.tif == TimeInForce::FOK) {
             if (!canFillCompletely(order)) {
-                result.status = ExecutionStatus::Rejected;
+                result = ExecutionResult::makeRejection(order.id, RejectReason::FOKCannotFill);
                 result.remainingQuantity = order.quantity;
-                result.message = "FOK order cannot be filled completely";
                 return result;
             }
         }
+
+        // Store original quantity for reporting
+        uint64_t originalQuantity = order.quantity;
 
         // Try to match against the opposite side
         std::vector<Trade> trades;
         matchOrder(order, trades);
 
         result.trades = std::move(trades);
-        result.filledQuantity = result.trades.empty() ? 0 : 
-            [&]() {
-                uint64_t total = 0;
-                for (const auto& t : result.trades) total += t.quantity;
-                return total;
-            }();
+        result.filledQuantity = originalQuantity - order.quantity;
         result.remainingQuantity = order.quantity;
 
         // Handle IOC (Immediate-or-Cancel): Don't rest in book
         if (order.tif == TimeInForce::IOC) {
             if (result.filledQuantity == 0) {
                 result.status = ExecutionStatus::Cancelled;
-                result.message = "IOC order not filled";
+                result.message = "IOC order not filled - no matching liquidity";
             } else if (order.quantity > 0) {
                 result.status = ExecutionStatus::PartialFill;
                 result.message = "IOC order partially filled, remainder cancelled";
             } else {
                 result.status = ExecutionStatus::Filled;
+                result.message = "IOC order fully filled";
             }
             return result;
         }
@@ -112,36 +121,39 @@ namespace Mercury {
         ExecutionResult result;
         result.orderId = order.id;
 
+        // Edge case: zero quantity
+        if (order.quantity == 0) {
+            return ExecutionResult::makeRejection(order.id, RejectReason::InvalidQuantity);
+        }
+
         // Market orders must have matching liquidity on the opposite side
         bool hasLiquidity = (order.side == Side::Buy) ? 
             orderBook_.hasAsks() : orderBook_.hasBids();
 
         if (!hasLiquidity) {
-            result.status = ExecutionStatus::Rejected;
+            result = ExecutionResult::makeRejection(order.id, RejectReason::NoLiquidity);
             result.remainingQuantity = order.quantity;
-            result.message = "No liquidity available for market order";
             return result;
         }
 
         // Handle FOK: Check if we can fill completely
         if (order.tif == TimeInForce::FOK) {
             if (!canFillCompletely(order)) {
-                result.status = ExecutionStatus::Rejected;
+                result = ExecutionResult::makeRejection(order.id, RejectReason::FOKCannotFill);
                 result.remainingQuantity = order.quantity;
-                result.message = "FOK market order cannot be filled completely";
                 return result;
             }
         }
+
+        // Store original quantity
+        uint64_t originalQuantity = order.quantity;
 
         // Match against the book
         std::vector<Trade> trades;
         matchOrder(order, trades);
 
         result.trades = std::move(trades);
-        result.filledQuantity = 0;
-        for (const auto& t : result.trades) {
-            result.filledQuantity += t.quantity;
-        }
+        result.filledQuantity = originalQuantity - order.quantity;
         result.remainingQuantity = order.quantity;
 
         // Market orders don't rest - any unfilled quantity is cancelled
@@ -151,7 +163,8 @@ namespace Mercury {
                 result.message = "Partially filled, remainder cancelled (no more liquidity)";
             } else {
                 result.status = ExecutionStatus::Cancelled;
-                result.message = "Market order cancelled (no liquidity)";
+                result.rejectReason = RejectReason::NoLiquidity;
+                result.message = "Market order cancelled - insufficient liquidity";
             }
         } else {
             result.status = ExecutionStatus::Filled;
@@ -169,12 +182,15 @@ namespace Mercury {
         ExecutionResult result;
         result.orderId = orderId;
 
+        // Edge case: invalid order ID
+        if (orderId == 0) {
+            return ExecutionResult::makeRejection(orderId, RejectReason::InvalidOrderId);
+        }
+
         // Try to get the order first to verify it exists
         auto existingOrder = orderBook_.getOrder(orderId);
         if (!existingOrder.has_value()) {
-            result.status = ExecutionStatus::Rejected;
-            result.message = "Order not found";
-            return result;
+            return ExecutionResult::makeRejection(orderId, RejectReason::OrderNotFound);
         }
 
         // Remove the order
@@ -182,7 +198,7 @@ namespace Mercury {
 
         result.status = ExecutionStatus::Cancelled;
         result.remainingQuantity = existingOrder->quantity;
-        result.message = "Order cancelled";
+        result.message = "Order cancelled successfully";
 
         return result;
     }
@@ -195,40 +211,54 @@ namespace Mercury {
         ExecutionResult result;
         result.orderId = orderId;
 
+        // Edge case: invalid order ID
+        if (orderId == 0) {
+            return ExecutionResult::makeRejection(orderId, RejectReason::InvalidOrderId);
+        }
+
+        // Edge case: no actual changes requested
+        if (newPrice <= 0 && newQuantity == 0) {
+            return ExecutionResult::makeRejection(orderId, RejectReason::ModifyNoChanges);
+        }
+
+        // Edge case: invalid new price
+        if (newPrice < 0) {
+            return ExecutionResult::makeRejection(orderId, RejectReason::InvalidPrice);
+        }
+
         // Get the existing order
         auto existingOrder = orderBook_.getOrder(orderId);
         if (!existingOrder.has_value()) {
-            result.status = ExecutionStatus::Rejected;
-            result.message = "Order not found for modification";
-            return result;
+            return ExecutionResult::makeRejection(orderId, RejectReason::OrderNotFound);
         }
 
         Order modifiedOrder = existingOrder.value();
 
+        // Check if there are actual changes
+        bool hasChanges = false;
+
         // Apply modifications
-        bool priceChanged = false;
         if (newPrice > 0 && newPrice != modifiedOrder.price) {
             modifiedOrder.price = newPrice;
-            priceChanged = true;
+            hasChanges = true;
         }
 
-        if (newQuantity > 0) {
+        if (newQuantity > 0 && newQuantity != modifiedOrder.quantity) {
             modifiedOrder.quantity = newQuantity;
+            hasChanges = true;
         }
 
-        // If price changed, we need to remove and re-add (loses time priority)
-        // If only quantity decreased, we can keep priority
-        // If quantity increased, typically loses priority (implementation choice)
-        
-        // For simplicity, we always cancel and re-add on any modification
-        // This is the safest approach and matches most exchange behavior
+        if (!hasChanges) {
+            return ExecutionResult::makeRejection(orderId, RejectReason::ModifyNoChanges);
+        }
+
+        // Remove the original order
         orderBook_.removeOrder(orderId);
 
-        // Re-submit as a new order (keeping the same ID for tracking)
+        // Re-submit with new timestamp (loses time priority)
         modifiedOrder.timestamp = getTimestamp();
         
         // Check if the modified order would cross the book
-        // If so, we need to match it
         bool wouldCross = false;
         if (modifiedOrder.side == Side::Buy && orderBook_.hasAsks()) {
             wouldCross = modifiedOrder.price >= orderBook_.getBestAsk();
@@ -239,9 +269,15 @@ namespace Mercury {
         if (wouldCross) {
             // Process as a new limit order (may result in fills)
             result = processLimitOrder(modifiedOrder);
-            result.status = (result.status == ExecutionStatus::Filled) ? 
-                ExecutionStatus::Filled : ExecutionStatus::Modified;
-            result.message = "Order modified and matched";
+            // Adjust status to indicate this was a modify
+            if (result.status != ExecutionStatus::Rejected) {
+                if (result.status == ExecutionStatus::Filled) {
+                    result.message = "Order modified and fully filled";
+                } else {
+                    result.status = ExecutionStatus::Modified;
+                    result.message = "Order modified and partially matched";
+                }
+            }
         } else {
             // Just add to book
             orderBook_.addOrder(modifiedOrder);
@@ -255,6 +291,11 @@ namespace Mercury {
 
     bool MatchingEngine::matchOrder(Order& order, std::vector<Trade>& trades) {
         bool matched = false;
+
+        // Safety check: order must have quantity
+        if (order.quantity == 0) {
+            return false;
+        }
 
         // Determine which side to match against
         if (order.side == Side::Buy) {
@@ -300,11 +341,24 @@ namespace Mercury {
         auto ordersAtLevel = orderBook_.getOrdersAtPrice(priceLevel, 
             order.side == Side::Buy ? Side::Sell : Side::Buy);
 
+        // Edge case: empty price level (shouldn't happen but be safe)
+        if (ordersAtLevel.empty()) {
+            return 0;
+        }
+
         for (const auto& restingOrder : ordersAtLevel) {
             if (order.quantity == 0) break;
 
-            // Calculate fill quantity
+            // Self-trade prevention: skip if same client ID
+            if (order.clientId != 0 && order.clientId == restingOrder.clientId) {
+                continue;  // Skip this order to prevent self-trade
+            }
+
+            // Calculate fill quantity (with overflow protection)
             uint64_t fillQty = std::min(order.quantity, restingOrder.quantity);
+            
+            // Edge case: zero fill (shouldn't happen)
+            if (fillQty == 0) continue;
 
             // Create trade record
             Trade trade;
@@ -324,9 +378,11 @@ namespace Mercury {
             trades.push_back(trade);
             notifyTrade(trade);
 
-            // Update statistics
+            // Update statistics (with overflow protection)
             tradeCount_++;
-            totalVolume_ += fillQty;
+            if (totalVolume_ <= std::numeric_limits<uint64_t>::max() - fillQty) {
+                totalVolume_ += fillQty;
+            }
 
             // Update quantities
             order.quantity -= fillQty;
@@ -352,6 +408,11 @@ namespace Mercury {
             return true;
         }
 
+        // Edge case: negative price level (shouldn't happen)
+        if (priceLevel < 0) {
+            return false;
+        }
+
         // Limit order price check
         if (order.side == Side::Buy) {
             // Buyers want to buy at or below their limit price
@@ -363,11 +424,20 @@ namespace Mercury {
     }
 
     bool MatchingEngine::canFillCompletely(const Order& order) const {
+        // Edge case: zero quantity can always be "filled"
+        if (order.quantity == 0) {
+            return true;
+        }
+
         uint64_t remainingQty = order.quantity;
 
         if (order.side == Side::Buy) {
             // Check ask side
-            auto askLevels = orderBook_.getAskLevels();
+            if (!orderBook_.hasAsks()) {
+                return false;
+            }
+            
+            const auto& askLevels = orderBook_.getAskLevels();
             for (const auto& [price, orders] : askLevels) {
                 if (!isPriceAcceptable(order, price)) break;
                 
@@ -380,7 +450,11 @@ namespace Mercury {
             }
         } else {
             // Check bid side
-            auto bidLevels = orderBook_.getBidLevels();
+            if (!orderBook_.hasBids()) {
+                return false;
+            }
+            
+            const auto& bidLevels = orderBook_.getBidLevels();
             for (const auto& [price, orders] : bidLevels) {
                 if (!isPriceAcceptable(order, price)) break;
                 

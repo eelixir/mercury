@@ -4,7 +4,17 @@
 
 namespace Mercury {
 
-    void OrderBook::addOrder(const Order& order) {
+    bool OrderBook::addOrder(const Order& order) {
+        // Check for duplicate order ID
+        if (orderLookup.find(order.id) != orderLookup.end()) {
+            return false;  // Duplicate ID
+        }
+
+        // Validate order has required fields
+        if (order.id == 0 || order.quantity == 0) {
+            return false;  // Invalid order
+        }
+
         // Store location for O(1) lookup
         orderLookup[order.id] = { order.price, order.side };
 
@@ -15,19 +25,25 @@ namespace Mercury {
             // Add to Asks map
             asks[order.price].push_back(order);
         }
+
+        return true;
     }
 
-    void OrderBook::removeOrder(uint64_t orderId) {
+    bool OrderBook::removeOrder(uint64_t orderId) {
+        // Edge case: invalid ID
+        if (orderId == 0) {
+            return false;
+        }
+
         // 1. Find the order location in O(1)
         auto it = orderLookup.find(orderId);
         if (it == orderLookup.end()) {
-            return; // Order not found
+            return false; // Order not found
         }
 
         const auto& location = it->second;
 
         // 2. Get the correct map and vector
-        // We use a pointer to the vector to avoid copying
         std::vector<Order>* orders = nullptr;
         
         if (location.side == Side::Buy) {
@@ -58,9 +74,15 @@ namespace Mercury {
 
         // 4. Remove from lookup map
         orderLookup.erase(it);
+        return true;
     }
 
     std::optional<Order> OrderBook::getOrder(uint64_t orderId) const {
+        // Edge case: invalid ID
+        if (orderId == 0) {
+            return std::nullopt;
+        }
+
         auto it = orderLookup.find(orderId);
         if (it == orderLookup.end()) {
             return std::nullopt;
@@ -92,6 +114,11 @@ namespace Mercury {
     }
 
     bool OrderBook::updateOrderQuantity(uint64_t orderId, uint64_t newQuantity) {
+        // Edge case: invalid ID
+        if (orderId == 0) {
+            return false;
+        }
+
         auto it = orderLookup.find(orderId);
         if (it == orderLookup.end()) {
             return false;
@@ -137,7 +164,7 @@ namespace Mercury {
                 return it->second;
             }
         }
-        return {};
+        return {};  // Return empty vector if no orders at this price
     }
 
     uint64_t OrderBook::getBestBidQuantity() const {
@@ -145,6 +172,10 @@ namespace Mercury {
         
         uint64_t total = 0;
         for (const auto& order : bids.begin()->second) {
+            // Overflow protection
+            if (total > std::numeric_limits<uint64_t>::max() - order.quantity) {
+                return std::numeric_limits<uint64_t>::max();
+            }
             total += order.quantity;
         }
         return total;
@@ -155,6 +186,34 @@ namespace Mercury {
         
         uint64_t total = 0;
         for (const auto& order : asks.begin()->second) {
+            // Overflow protection
+            if (total > std::numeric_limits<uint64_t>::max() - order.quantity) {
+                return std::numeric_limits<uint64_t>::max();
+            }
+            total += order.quantity;
+        }
+        return total;
+    }
+
+    uint64_t OrderBook::getQuantityAtPrice(int64_t price, Side side) const {
+        const std::vector<Order>* orders = nullptr;
+        
+        if (side == Side::Buy) {
+            auto it = bids.find(price);
+            if (it != bids.end()) orders = &it->second;
+        } else {
+            auto it = asks.find(price);
+            if (it != asks.end()) orders = &it->second;
+        }
+
+        if (!orders) return 0;
+
+        uint64_t total = 0;
+        for (const auto& order : *orders) {
+            // Overflow protection
+            if (total > std::numeric_limits<uint64_t>::max() - order.quantity) {
+                return std::numeric_limits<uint64_t>::max();
+            }
             total += order.quantity;
         }
         return total;
@@ -162,20 +221,35 @@ namespace Mercury {
 
     void OrderBook::printBook() const {
         std::cout << "--- ASK SIDE (Sellers) ---\n";
-        // Iterate in reverse to show highest asks at top (or standard for low-to-high)
-        for (auto it = asks.rbegin(); it != asks.rend(); ++it) {
-            std::cout << "Price: " << it->first << " | Qty: ";
-            for (const auto& o : it->second) std::cout << o.quantity << " ";
-            std::cout << "\n";
+        if (asks.empty()) {
+            std::cout << "(empty)\n";
+        } else {
+            // Iterate in reverse to show highest asks at top
+            for (auto it = asks.rbegin(); it != asks.rend(); ++it) {
+                uint64_t totalQty = 0;
+                for (const auto& o : it->second) totalQty += o.quantity;
+                std::cout << "Price: " << it->first << " | Total Qty: " << totalQty 
+                          << " | Orders: " << it->second.size() << "\n";
+            }
         }
 
         std::cout << "--------------------------\n";
+        
+        if (hasBids() && hasAsks()) {
+            std::cout << "Spread: " << getSpread() << " | Mid: " << getMidPrice() << "\n";
+            std::cout << "--------------------------\n";
+        }
 
         std::cout << "--- BID SIDE (Buyers) ---\n";
-        for (const auto& [price, orderList] : bids) {
-            std::cout << "Price: " << price << " | Qty: ";
-            for (const auto& o : orderList) std::cout << o.quantity << " ";
-            std::cout << "\n";
+        if (bids.empty()) {
+            std::cout << "(empty)\n";
+        } else {
+            for (const auto& [price, orderList] : bids) {
+                uint64_t totalQty = 0;
+                for (const auto& o : orderList) totalQty += o.quantity;
+                std::cout << "Price: " << price << " | Total Qty: " << totalQty 
+                          << " | Orders: " << orderList.size() << "\n";
+            }
         }
         std::cout << "\n";
     }
