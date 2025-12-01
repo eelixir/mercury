@@ -70,6 +70,14 @@ namespace Mercury {
         int64_t minSpread = 2;              // Min bid-ask spread
         int64_t maxSpread = 10;             // Max spread
         
+        // Price bounds (prevent extreme drift)
+        double minPricePct = 0.5;           // Min price as % of start (50%)
+        double maxPricePct = 2.0;           // Max price as % of start (200%)
+        
+        // Multiple clients
+        uint64_t numClients = 10;           // Number of external clients
+        uint64_t clientIdStart = 9000;      // Starting client ID for external clients
+        
         // Randomness
         uint32_t seed = 42;                 // RNG seed (0 = random)
     };
@@ -213,7 +221,7 @@ namespace Mercury {
          * @param externalClientId Client ID to use for generated orders
          * @return Vector of simulated orders
          */
-        std::vector<Order> generateOrders(uint64_t tick, uint64_t externalClientId = 9999) {
+        std::vector<Order> generateOrders(uint64_t tick, uint64_t externalClientId = 0) {
             std::vector<Order> orders;
             
             // Update price based on pattern
@@ -221,7 +229,16 @@ namespace Mercury {
             
             // Generate the configured number of orders
             for (uint64_t i = 0; i < config_.ordersPerTick; ++i) {
-                Order order = generateOrder(tick, externalClientId);
+                // Use specified client ID, or distribute among multiple clients
+                uint64_t clientId = externalClientId;
+                if (clientId == 0 && config_.numClients > 0) {
+                    // Randomly select from pool of external clients
+                    std::uniform_int_distribution<uint64_t> clientDist(0, config_.numClients - 1);
+                    clientId = config_.clientIdStart + clientDist(rng_);
+                } else if (clientId == 0) {
+                    clientId = 9999;  // Default fallback
+                }
+                Order order = generateOrder(tick, clientId);
                 orders.push_back(order);
             }
             
@@ -285,7 +302,11 @@ namespace Mercury {
                     break;
             }
             
-            currentPrice_ = std::max(currentPrice_, int64_t(1));
+            // Enforce price bounds to prevent extreme drift
+            int64_t minPrice = static_cast<int64_t>(config_.startPrice * config_.minPricePct);
+            int64_t maxPrice = static_cast<int64_t>(config_.startPrice * config_.maxPricePct);
+            currentPrice_ = std::max(currentPrice_, std::max(minPrice, int64_t(1)));
+            currentPrice_ = std::min(currentPrice_, maxPrice);
         }
 
         void updatePriceRandom() {
@@ -651,9 +672,9 @@ namespace Mercury {
                 metrics.unrealizedPnL = pnl.unrealizedPnL;
                 metrics.totalPnL = pnl.totalPnL;
                 
-                // Calculate win/loss trades (simplified)
-                metrics.winningTrades = metrics.totalTrades / 2;  // Placeholder
-                metrics.losingTrades = metrics.totalTrades - metrics.winningTrades;
+                // Get actual win/loss counts from PnLTracker
+                metrics.winningTrades = pnl.winningTrades;
+                metrics.losingTrades = pnl.losingTrades;
             }
             
             metrics.calculate();

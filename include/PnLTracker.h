@@ -48,6 +48,8 @@ namespace Mercury {
         uint64_t totalTrades = 0;           // Total number of trades
         uint64_t totalBuyQuantity = 0;      // Total quantity bought
         uint64_t totalSellQuantity = 0;     // Total quantity sold
+        uint64_t winningTrades = 0;         // Number of profitable closing trades
+        uint64_t losingTrades = 0;          // Number of losing closing trades
         int64_t avgBuyPrice = 0;            // Average buy price
         int64_t avgSellPrice = 0;           // Average sell price
         

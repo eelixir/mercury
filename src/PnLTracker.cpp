@@ -177,7 +177,15 @@ namespace Mercury {
                 // Short P&L: (sell price - buy price) * quantity
                 // For shorts: entry.price was the sell price, current price is buy to cover
                 int64_t pnlPerUnit = entry.price - price;
-                realizedPnL += pnlPerUnit * static_cast<int64_t>(closeQty);
+                int64_t closingPnL = pnlPerUnit * static_cast<int64_t>(closeQty);
+                realizedPnL += closingPnL;
+                
+                // Track winning/losing trades (each closed entry counts as a trade)
+                if (closingPnL > 0) {
+                    pnl.winningTrades++;
+                } else if (closingPnL < 0) {
+                    pnl.losingTrades++;
+                }
                 
                 // Update short position tracking
                 pnl.shortQuantity -= closeQty;
@@ -201,7 +209,15 @@ namespace Mercury {
                 // Long P&L: (sell price - buy price) * quantity
                 // For longs: entry.price was the buy price, current price is sell price
                 int64_t pnlPerUnit = price - entry.price;
-                realizedPnL += pnlPerUnit * static_cast<int64_t>(closeQty);
+                int64_t closingPnL = pnlPerUnit * static_cast<int64_t>(closeQty);
+                realizedPnL += closingPnL;
+                
+                // Track winning/losing trades (each closed entry counts as a trade)
+                if (closingPnL > 0) {
+                    pnl.winningTrades++;
+                } else if (closingPnL < 0) {
+                    pnl.losingTrades++;
+                }
                 
                 // Update long position tracking
                 pnl.longQuantity -= closeQty;
