@@ -102,6 +102,9 @@ set(MERCURY_HEADERS
     include/MarketMakingStrategy.h
     include/MomentumStrategy.h
     include/StrategyManager.h
+    include/StrategyDemo.h
+    include/Backtester.h
+    include/BacktestDemo.h
 )
 target_sources(mercury_lib PRIVATE ${MERCURY_HEADERS})
 

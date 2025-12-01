@@ -662,4 +662,144 @@ TEST_F(StrategyRiskTest, CheckQuantityLimit) {
     EXPECT_TRUE(strategy.getConfig().maxOrderQuantity == 50);
 }
 
+// ============== Backtester Tests ==============
+
+#include "Backtester.h"
+
+class BacktesterTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        config.numTicks = 100;
+        config.warmupTicks = 10;
+        config.verbose = false;
+        config.outputDir = "build";
+        config.writeTradeLog = false;
+        config.writeOrderLog = false;
+        config.writePnLLog = false;
+        
+        config.orderFlow.startPrice = 100;
+        config.orderFlow.ordersPerTick = 5;
+        config.orderFlow.volatility = 0.01;
+        config.orderFlow.minOrderSize = 10;
+        config.orderFlow.maxOrderSize = 50;
+    }
+    
+    BacktestConfig config;
+};
+
+TEST_F(BacktesterTest, BasicBacktestRuns) {
+    config.orderFlow.pattern = OrderFlowPattern::Random;
+    
+    Backtester backtester(config);
+    
+    // Add a simple market making strategy
+    MarketMakingConfig mmConfig;
+    mmConfig.minSpread = 2;
+    mmConfig.maxSpread = 8;
+    mmConfig.quoteQuantity = 20;
+    backtester.addStrategy(std::make_unique<MarketMakingStrategy>(mmConfig));
+    
+    // Run backtest
+    auto report = backtester.run();
+    
+    // Verify report
+    EXPECT_EQ(report.totalTicks, config.numTicks);
+    EXPECT_EQ(report.strategyMetrics.size(), 1);
+    EXPECT_GT(report.totalTrades, 0);
+}
+
+TEST_F(BacktesterTest, MomentumBacktest) {
+    config.orderFlow.pattern = OrderFlowPattern::Trending;
+    config.orderFlow.trendStrength = 0.002;
+    config.numTicks = 200;
+    config.warmupTicks = 50;
+    
+    Backtester backtester(config);
+    
+    // Add momentum strategy
+    MomentumConfig momConfig;
+    momConfig.shortPeriod = 5;
+    momConfig.longPeriod = 15;
+    momConfig.entryThreshold = 0.01;
+    momConfig.useMarketOrders = true;
+    backtester.addStrategy(std::make_unique<MomentumStrategy>(momConfig));
+    
+    // Run backtest
+    auto report = backtester.run();
+    
+    // Verify report
+    EXPECT_EQ(report.totalTicks, config.numTicks);
+    EXPECT_EQ(report.strategyMetrics.size(), 1);
+    // In a trending market, momentum should generate some signals
+}
+
+TEST_F(BacktesterTest, MultiStrategyBacktest) {
+    config.orderFlow.pattern = OrderFlowPattern::MeanReverting;
+    config.numTicks = 150;
+    
+    Backtester backtester(config);
+    
+    // Add multiple strategies
+    MarketMakingConfig mmConfig;
+    mmConfig.name = "MM";
+    mmConfig.quoteQuantity = 20;
+    backtester.addStrategy(std::make_unique<MarketMakingStrategy>(mmConfig));
+    
+    MomentumConfig momConfig;
+    momConfig.name = "Momentum";
+    momConfig.baseQuantity = 15;
+    backtester.addStrategy(std::make_unique<MomentumStrategy>(momConfig));
+    
+    // Run backtest
+    auto report = backtester.run();
+    
+    // Verify both strategies tracked
+    EXPECT_EQ(report.strategyMetrics.size(), 2);
+    // Strategy names are returned by getName(), not from config
+    EXPECT_EQ(report.strategyMetrics[0].strategyName, "MarketMaking");
+    EXPECT_EQ(report.strategyMetrics[1].strategyName, "Momentum");
+}
+
+TEST_F(BacktesterTest, OrderFlowPatterns) {
+    std::vector<OrderFlowPattern> patterns = {
+        OrderFlowPattern::Random,
+        OrderFlowPattern::Trending,
+        OrderFlowPattern::MeanReverting,
+        OrderFlowPattern::Choppy
+    };
+    
+    for (const auto& pattern : patterns) {
+        config.orderFlow.pattern = pattern;
+        config.numTicks = 50;
+        
+        Backtester backtester(config);
+        
+        MarketMakingConfig mmConfig;
+        backtester.addStrategy(std::make_unique<MarketMakingStrategy>(mmConfig));
+        
+        auto report = backtester.run();
+        
+        EXPECT_EQ(report.totalTicks, config.numTicks);
+        EXPECT_GT(report.totalTrades, 0);
+        EXPECT_GT(report.endPrice, 0);
+    }
+}
+
+TEST_F(BacktesterTest, PnLTracking) {
+    config.orderFlow.pattern = OrderFlowPattern::Random;
+    config.numTicks = 100;
+    
+    Backtester backtester(config);
+    
+    MarketMakingConfig mmConfig;
+    mmConfig.quoteQuantity = 30;
+    backtester.addStrategy(std::make_unique<MarketMakingStrategy>(mmConfig));
+    
+    auto report = backtester.run();
+    
+    // Check that P&L metrics are calculated
+    const auto& metrics = report.strategyMetrics[0];
+    EXPECT_TRUE(metrics.totalPnL == metrics.realizedPnL + metrics.unrealizedPnL);
+}
+
 // Tests will be run by gtest_main

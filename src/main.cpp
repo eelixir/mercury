@@ -13,6 +13,7 @@
 #include "ThreadPool.h"
 #include "AsyncWriter.h"
 #include "StrategyDemo.h"
+#include "BacktestDemo.h"
 
 // Helper function to convert ExecutionStatus to string
 std::string statusToString(Mercury::ExecutionStatus status) {
@@ -179,6 +180,7 @@ int main(int argc, char* argv[]) {
         bool useAsyncWriters = false;
         
         bool runStrategies = false;
+        bool runBacktest = false;
         
         for (int i = 1; i < argc; ++i) {
             std::string arg = argv[i];
@@ -188,6 +190,8 @@ int main(int argc, char* argv[]) {
                 useAsyncWriters = true;
             } else if (arg == "--strategies" || arg == "-s") {
                 runStrategies = true;
+            } else if (arg == "--backtest" || arg == "-b") {
+                runBacktest = true;
             } else if (arg[0] != '-') {
                 positionalArgs.push_back(arg);
             }
@@ -196,6 +200,30 @@ int main(int argc, char* argv[]) {
         // If strategies flag is set, run strategy demos
         if (runStrategies) {
             Mercury::runAllStrategyDemos();
+            return 0;
+        }
+        
+        // If backtest flag is set, run backtest demos
+        if (runBacktest) {
+            // Check if specific backtest requested
+            if (positionalArgs.empty()) {
+                Mercury::runAllBacktestDemos();
+            } else {
+                std::string backtestType = positionalArgs[0];
+                if (backtestType == "mm" || backtestType == "marketmaking") {
+                    Mercury::runMarketMakingBacktest();
+                } else if (backtestType == "momentum" || backtestType == "mom") {
+                    Mercury::runMomentumBacktest();
+                } else if (backtestType == "multi") {
+                    Mercury::runMultiStrategyBacktest();
+                } else if (backtestType == "compare" || backtestType == "comparison") {
+                    Mercury::runMarketConditionComparison();
+                } else if (backtestType == "stress") {
+                    Mercury::runStressBacktest();
+                } else {
+                    Mercury::runAllBacktestDemos();
+                }
+            }
             return 0;
         }
         
@@ -579,7 +607,15 @@ int main(int argc, char* argv[]) {
         std::cout << "Options:\n";
         std::cout << "  --concurrent, -c   Enable concurrent parsing and post-trade processing\n";
         std::cout << "  --async-io, -a     Enable asynchronous I/O writers\n";
-        std::cout << "  --strategies, -s   Run trading strategy demos\n\n";
+        std::cout << "  --strategies, -s   Run trading strategy demos\n";
+        std::cout << "  --backtest, -b     Run backtesting demos\n\n";
+        std::cout << "Backtest modes (use with --backtest):\n";
+        std::cout << "  mercury --backtest              Run all backtest demos\n";
+        std::cout << "  mercury --backtest mm           Market making backtest\n";
+        std::cout << "  mercury --backtest momentum     Momentum strategy backtest\n";
+        std::cout << "  mercury --backtest multi        Multi-strategy backtest\n";
+        std::cout << "  mercury --backtest compare      Market condition comparison\n";
+        std::cout << "  mercury --backtest stress       Stress test backtest\n\n";
         runDemo();
     }
 

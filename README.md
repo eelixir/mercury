@@ -20,6 +20,7 @@ Mercury is a low-latency trading engine implementing a full limit order book wit
 - **Risk Management:** Pre-trade risk checks with position/exposure limits
 - **P&L Tracking:** Realized and unrealized P&L with FIFO cost basis
 - **Trading Strategies:** Market making and momentum strategies with real-time execution
+- **Backtesting:** Comprehensive backtesting framework with simulated order flow and P&L tracking
 - **Trade Logging:** CSV output for all executions, risk events, and P&L snapshots
 - **Comprehensive Validation:** Detailed rejection reasons for invalid orders
 - **Concurrency Support:** Thread pool, parallel CSV parsing, async I/O writers
@@ -117,6 +118,8 @@ mercury/
 │   ├── MomentumStrategy.h      # Trend-following strategy
 │   ├── StrategyManager.h       # Strategy orchestration
 │   ├── StrategyDemo.h  # Demo scenarios
+│   ├── Backtester.h    # Backtesting framework
+│   ├── BacktestDemo.h  # Backtest demo functions
 │   ├── HashMap.h      # Robin Hood hash map
 │   ├── IntrusiveList.h
 │   ├── ObjectPool.h   # Memory pool allocator
@@ -134,7 +137,8 @@ mercury/
 ├── data/              # Sample order datasets
 └── docs/              # Additional documentation
     ├── PROFILING.md   # Performance analysis guide
-    └── STRATEGIES.md  # Strategy development guide
+    ├── STRATEGIES.md  # Strategy development guide
+    └── BACKTESTING.md # Backtesting framework guide
 ```
 
 ## Building & Running
@@ -179,6 +183,14 @@ cmake --build build
 
 # Run strategy simulation demo
 ./build/mercury --strategies
+
+# Run backtesting demos
+./build/mercury --backtest             # All backtest demos
+./build/mercury --backtest mm          # Market making backtest
+./build/mercury --backtest momentum    # Momentum strategy backtest
+./build/mercury --backtest multi       # Multi-strategy comparison
+./build/mercury --backtest compare     # Market condition comparison
+./build/mercury --backtest stress      # Stress test
 ```
 
 ### Command Line Options
@@ -188,6 +200,7 @@ cmake --build build
 | `--concurrent` | `-c` | Enable parallel CSV parsing and async post-trade processing |
 | `--async-io` | `-a` | Enable asynchronous file I/O with background writer threads |
 | `--strategies` | `-s` | Run trading strategy simulation demos |
+| `--backtest` | `-b` | Run backtesting demos (mm, momentum, multi, compare, stress) |
 
 ### Example Output
 
@@ -324,6 +337,61 @@ Strategies registered: 2
 
 See [docs/STRATEGIES.md](docs/STRATEGIES.md) for detailed strategy development guide.
 
+## Backtesting
+
+Mercury includes a comprehensive backtesting framework for validating strategies with simulated order flow.
+
+### Running Backtests
+
+```bash
+# Run all backtest demos
+./build/mercury --backtest
+
+# Run specific backtest
+./build/mercury --backtest mm          # Market making
+./build/mercury --backtest momentum    # Momentum strategy
+./build/mercury --backtest multi       # Multi-strategy comparison
+./build/mercury --backtest compare     # Market condition comparison
+./build/mercury --backtest stress      # Stress test (2000 ticks)
+```
+
+### Features
+
+- **Order Flow Simulation:** 7 market patterns (Random, Trending, MeanReverting, HighVolatility, LowVolatility, MomentumBurst, Choppy)
+- **Strategy Validation:** Test strategies with realistic order flow
+- **P&L Tracking:** FIFO-based realized P&L and mark-to-market unrealized P&L
+- **CSV Output:** Trade logs, order logs, and P&L snapshots
+- **Performance Metrics:** Win rate, fill rate, drawdown, Sharpe ratio
+
+### Example Usage
+
+```cpp
+#include "Backtester.h"
+
+// Configure backtest
+BacktestConfig config;
+config.numTicks = 1000;
+config.warmupTicks = 50;
+config.orderFlow.pattern = OrderFlowPattern::MeanReverting;
+config.orderFlow.volatility = 0.015;
+
+// Create backtester
+Backtester backtester(config);
+
+// Add strategy
+MarketMakingConfig mmConfig;
+mmConfig.quoteQuantity = 50;
+mmConfig.maxInventory = 500;
+backtester.addStrategy(std::make_unique<MarketMakingStrategy>(mmConfig));
+
+// Run and analyze
+auto report = backtester.run();
+std::cout << "P&L: " << report.strategyMetrics[0].totalPnL << "\n";
+std::cout << "Win Rate: " << (report.strategyMetrics[0].winRate * 100) << "%\n";
+```
+
+See [docs/BACKTESTING.md](docs/BACKTESTING.md) for the complete backtesting guide.
+
 ## Performance
 
 Benchmarks run on 12-core CPU @ 3.6GHz (Release build):
@@ -346,12 +414,13 @@ cmake --build build
 
 ## Testing
 
-230+ unit tests covering:
+240+ unit tests covering:
 - Order book operations (insert, remove, update)
 - Matching engine (limit, market, IOC, FOK)
 - Risk manager (position limits, exposure limits, order limits)
 - P&L tracker (realized P&L, unrealized P&L, FIFO cost basis)
 - Trading strategies (market making, momentum, signal generation)
+- Backtesting (order flow simulation, P&L tracking, metrics)
 - Concurrency (thread pool, async writers, parallel parsing)
 - Edge cases (partial fills, empty book, invalid orders)
 - Stress tests (100K+ orders, deep books)
@@ -381,8 +450,8 @@ cmake --build build
 - [x] PnL module (realized + unrealized)
 - [x] Multithreading/concurrency (thread pool, async I/O, parallel parsing)
 - [x] Strategy layer (market making, momentum)
+- [x] Backtesting framework with simulated order flow
 - [ ] Symbol-sharded matching (multi-symbol parallel processing)
-- [ ] Backtesting framework
 - [ ] Strategy performance analytics
 
 ## License
