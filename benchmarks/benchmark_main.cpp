@@ -6,6 +6,7 @@
  * - Order insertion latency (critical for tick-to-trade)
  * - Matching engine throughput
  * - Order book operations
+ * - Strategy signal generation
  * - Memory allocation patterns
  * 
  * Run with: ./mercury_benchmarks --benchmark_format=console
@@ -15,6 +16,9 @@
 #include "MatchingEngine.h"
 #include "OrderBook.h"
 #include "Order.h"
+#include "StrategyManager.h"
+#include "MarketMakingStrategy.h"
+#include "MomentumStrategy.h"
 #include <random>
 
 using namespace Mercury;
@@ -344,5 +348,147 @@ static void BM_RandomCancel(benchmark::State& state) {
     state.SetItemsProcessed(state.iterations() * 10000);
 }
 BENCHMARK(BM_RandomCancel)->Unit(benchmark::kMillisecond);
+
+// ============================================================================
+// STRATEGY BENCHMARKS
+// ============================================================================
+
+/**
+ * Benchmark: Market making strategy signal generation
+ * Measures latency to process a tick and generate quote signals.
+ */
+static void BM_MarketMakingSignal(benchmark::State& state) {
+    MatchingEngine engine;
+    
+    MarketMakingConfig mmConfig;
+    mmConfig.quoteQuantity = 50;
+    mmConfig.minSpread = 2;
+    mmConfig.maxSpread = 10;
+    mmConfig.maxInventory = 500;
+    
+    MarketMakingStrategy strategy(mmConfig);
+    
+    MarketTick tick;
+    tick.bidPrice = 99;
+    tick.askPrice = 101;
+    tick.bidQuantity = 500;
+    tick.askQuantity = 500;
+    tick.lastTradePrice = 100;
+    tick.timestamp = 1;
+    
+    for (auto _ : state) {
+        tick.timestamp++;
+        auto signals = strategy.onMarketTick(tick);
+        benchmark::DoNotOptimize(signals);
+    }
+    
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_MarketMakingSignal)->Unit(benchmark::kNanosecond);
+
+/**
+ * Benchmark: Momentum strategy signal generation (with price history)
+ * Measures latency after warmup period.
+ */
+static void BM_MomentumSignal(benchmark::State& state) {
+    MomentumConfig momConfig;
+    momConfig.shortPeriod = 5;
+    momConfig.longPeriod = 20;
+    momConfig.baseQuantity = 30;
+    momConfig.maxPosition = 100;
+    
+    MomentumStrategy strategy(momConfig);
+    
+    // Warmup with price history
+    int64_t price = 100;
+    for (uint64_t i = 0; i < momConfig.longPeriod + 10; ++i) {
+        MarketTick tick;
+        tick.bidPrice = price - 1;
+        tick.askPrice = price + 1;
+        tick.lastTradePrice = price;
+        tick.lastTradeQuantity = 100;
+        tick.timestamp = i + 1;
+        strategy.onMarketTick(tick);
+        price += (i % 3 == 0) ? 1 : -1;  // Small oscillation
+    }
+    
+    for (auto _ : state) {
+        MarketTick tick;
+        tick.bidPrice = price - 1;
+        tick.askPrice = price + 1;
+        tick.lastTradePrice = price;
+        tick.lastTradeQuantity = 100;
+        tick.timestamp++;
+        
+        auto signals = strategy.onMarketTick(tick);
+        benchmark::DoNotOptimize(signals);
+        
+        price += (tick.timestamp % 3 == 0) ? 1 : -1;
+    }
+    
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_MomentumSignal)->Unit(benchmark::kNanosecond);
+
+/**
+ * Benchmark: Strategy manager with multiple strategies
+ * Measures latency to process tick through all strategies.
+ */
+static void BM_StrategyManagerTick(benchmark::State& state) {
+    MatchingEngine engine;
+    StrategyManager manager(engine);
+    
+    // Disable logging for benchmark
+    StrategyManagerConfig config;
+    config.logExecutions = false;
+    config.logSignals = false;
+    manager.setConfig(config);
+    
+    MarketMakingConfig mmConfig;
+    mmConfig.name = "MM";
+    mmConfig.quoteQuantity = 50;
+    manager.addStrategy(std::make_unique<MarketMakingStrategy>(mmConfig));
+    
+    MomentumConfig momConfig;
+    momConfig.name = "Mom";
+    momConfig.shortPeriod = 5;
+    momConfig.longPeriod = 20;
+    manager.addStrategy(std::make_unique<MomentumStrategy>(momConfig));
+    
+    // Warmup
+    int64_t price = 100;
+    for (int i = 0; i < 50; ++i) {
+        MarketTick tick;
+        tick.bidPrice = price - 1;
+        tick.askPrice = price + 1;
+        tick.lastTradePrice = price;
+        tick.bidQuantity = 500;
+        tick.askQuantity = 500;
+        tick.lastTradeQuantity = 100;
+        tick.timestamp = i + 1;
+        manager.onMarketTick(tick);
+        price += (i % 3 == 0) ? 1 : -1;
+    }
+    
+    uint64_t ts = 51;
+    for (auto _ : state) {
+        MarketTick tick;
+        tick.bidPrice = price - 1;
+        tick.askPrice = price + 1;
+        tick.lastTradePrice = price;
+        tick.bidQuantity = 500;
+        tick.askQuantity = 500;
+        tick.lastTradeQuantity = 100;
+        tick.timestamp = ts++;
+        
+        manager.onMarketTick(tick);
+        benchmark::DoNotOptimize(manager.getTotalOrders());
+        
+        price += (ts % 3 == 0) ? 1 : -1;
+    }
+    
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_StrategyManagerTick)->Unit(benchmark::kMicrosecond);
 
 BENCHMARK_MAIN();

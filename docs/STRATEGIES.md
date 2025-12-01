@@ -239,37 +239,43 @@ Trend-following strategy using technical indicators to identify and ride price t
 #### Configuration
 
 ```cpp
-struct MomentumConfig {
+struct MomentumConfig : public StrategyConfig {
     std::string name = "Momentum";
+    
+    // Lookback periods
+    uint64_t shortPeriod = 5;          // Short-term lookback (fast signal)
+    uint64_t longPeriod = 20;          // Long-term lookback (slow signal)
+    uint64_t signalPeriod = 9;         // Signal line smoothing
+    
+    // Entry/Exit thresholds
+    double entryThreshold = 0.02;      // Min momentum % for entry (2%)
+    double exitThreshold = 0.005;      // Exit when momentum falls below (0.5%)
+    double strongSignal = 0.05;        // Strong momentum threshold (5%)
     
     // Position sizing
     uint64_t baseQuantity = 100;       // Base order size
-    uint64_t maxPosition = 1000;       // Maximum position
-    
-    // Moving average parameters
-    size_t shortPeriod = 5;            // Short MA period
-    size_t longPeriod = 20;            // Long MA period
-    bool useEMA = true;                // Use EMA vs SMA
-    
-    // Entry/Exit thresholds
-    double entryThreshold = 0.02;      // 2% momentum for entry
-    double exitThreshold = 0.005;      // Exit threshold
-    size_t confirmationBars = 2;       // Bars to confirm signal
+    double momentumScale = 2.0;        // Scale position with momentum strength
+    uint64_t maxPositionUnits = 5;     // Max position as multiple of base
+    uint64_t maxPosition = 200;        // Maximum absolute position
     
     // Risk management
-    double stopLossPercent = 0.05;     // 5% stop loss
-    double takeProfitPercent = 0.10;   // 10% take profit
-    bool useTrailingStop = true;
-    double trailingStopPercent = 0.03;
+    double stopLossPct = 0.03;         // Stop loss percentage (3%)
+    double takeProfitPct = 0.06;       // Take profit percentage (6%)
+    bool useTrailingStop = true;       // Use trailing stop loss
+    double trailingStopPct = 0.02;     // Trailing stop distance (2%)
     
-    // Filters
+    // Signal confirmation
+    uint64_t confirmationBars = 2;     // Bars to confirm signal
+    bool requireVolumeConfirm = true;  // Require volume spike for entry
+    double volumeMultiple = 1.5;       // Volume must be this multiple of avg
+    
+    // Trend filter
     bool useTrendFilter = true;        // Only trade with trend
-    bool requireVolumeConfirm = false; // Require volume confirmation
-    uint64_t minVolume = 1000;
+    uint64_t trendPeriod = 50;         // Trend lookback
     
     // Order type
-    bool useMarketOrders = true;       // Use market vs limit orders
-    int64_t limitOffset = 1;           // Offset for limit orders
+    bool useMarketOrders = true;       // Use market orders for quick execution
+    int64_t limitOffset = 2;           // Ticks away from market for limits
     
     uint32_t clientId = 0;
 };
@@ -284,12 +290,22 @@ config.baseQuantity = 30;
 config.shortPeriod = 5;
 config.longPeriod = 12;
 config.entryThreshold = 0.01;    // 1% momentum threshold
-config.stopLossPercent = 0.03;   // 3% stop loss
+config.stopLossPct = 0.03;       // 3% stop loss
 config.useTrendFilter = false;   // Trade both directions
+config.maxPosition = 100;        // Conservative position limit
 
 auto mom = std::make_unique<MomentumStrategy>(config);
 manager.addStrategy(std::move(mom));
 ```
+
+#### How It Works
+
+1. **Price History**: Maintains price and volume history for indicator calculation
+2. **Indicator Calculation**: Computes SMA, EMA, MACD, RSI, and trend slope
+3. **Entry Signals**: Confirms momentum crossovers over multiple bars
+4. **Position Sizing**: Scales position with momentum strength (capped by maxPosition)
+5. **Exit Management**: Uses minimum hold period (10 ticks) before momentum exits
+6. **Risk Controls**: Stop loss always active; trailing stop and momentum exits after min hold
 
 #### Technical Indicators
 
@@ -329,8 +345,13 @@ where RS = Average Gain / Average Loss
 | MACD crosses below signal line | **SELL confirmation** |
 | RSI < 30 (oversold) | **BUY filter** |
 | RSI > 70 (overbought) | **SELL filter** |
-| Price hits stop loss | **EXIT** |
+| Price hits stop loss | **EXIT** (immediate) |
+| Price hits trailing stop | **EXIT** (after min hold) |
 | Price hits take profit | **EXIT** |
+| Strong momentum reversal (3x threshold) | **EXIT** (after min hold) |
+| MACD histogram flips significantly | **EXIT** (after min hold) |
+
+**Note:** The strategy enforces a minimum hold period of 10 ticks before allowing momentum-based exits (trailing stops, MACD exits, momentum reversals). Stop loss is always active for risk protection.
 
 ---
 

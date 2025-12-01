@@ -116,11 +116,12 @@ Mercury::Backtester backtester(config);
 
 // Add momentum strategy
 Mercury::MomentumConfig momConfig;
-momConfig.shortPeriod = 10;
-momConfig.longPeriod = 30;
-momConfig.entryThreshold = 0.015;    // Enter on 1.5% momentum
+momConfig.shortPeriod = 5;
+momConfig.longPeriod = 20;
+momConfig.entryThreshold = 0.02;     // Enter on 2% momentum
 momConfig.stopLossPct = 0.03;        // 3% stop loss
 momConfig.takeProfitPct = 0.06;      // 6% take profit
+momConfig.maxPosition = 100;         // Conservative position limit
 backtester.addStrategy(std::make_unique<Mercury::MomentumStrategy>(momConfig));
 
 // Run and analyze

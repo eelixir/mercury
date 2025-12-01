@@ -288,19 +288,21 @@ config.baseQuantity = 50;
 config.shortPeriod = 5;        // Short MA period
 config.longPeriod = 20;        // Long MA period
 config.entryThreshold = 0.02;  // 2% momentum for entry
-config.exitThreshold = 0.005;  // Exit threshold
-config.stopLossPercent = 0.05; // 5% stop loss
-config.takeProfitPercent = 0.10; // 10% take profit
+config.stopLossPct = 0.03;     // 3% stop loss
+config.takeProfitPct = 0.06;   // 6% take profit
+config.maxPosition = 100;      // Conservative position limit
 
 manager.addStrategy(std::make_unique<MomentumStrategy>(config));
 ```
 
 Features:
 - SMA/EMA moving averages
-- MACD indicator
+- MACD indicator with histogram tracking
 - RSI overbought/oversold detection
+- Position size limits and enforcement
 - Stop-loss and take-profit automation
-- Trailing stops
+- Trailing stops with minimum hold period
+- Signal confirmation over multiple bars
 
 ### Running Strategies
 
@@ -414,7 +416,7 @@ cmake --build build
 
 ## Testing
 
-240+ unit tests covering:
+241 unit tests covering:
 - Order book operations (insert, remove, update)
 - Matching engine (limit, market, IOC, FOK)
 - Risk manager (position limits, exposure limits, order limits)

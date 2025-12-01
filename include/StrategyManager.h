@@ -306,6 +306,13 @@ namespace Mercury {
         // Statistics
         size_t getStrategyCount() const { return strategies_.size(); }
         uint64_t getTickCount() const { return tickCount_; }
+        uint64_t getTotalOrders() const {
+            uint64_t total = 0;
+            for (const auto& [name, metrics] : strategyMetrics_) {
+                total += metrics.ordersSubmitted;
+            }
+            return total;
+        }
 
         /**
          * Print summary of all strategies

@@ -105,6 +105,9 @@ BM_RealisticMix                                       0.29 ms         0.27 ms   
 | `BM_OrderCancel` | Cancel latency by book size |
 | `BM_SustainedThroughput` | Steady-state orders/second |
 | `BM_RealisticMix` | Mixed workload simulation |
+| `BM_MarketMakingSignal` | Market making strategy signal generation |
+| `BM_MomentumSignal` | Momentum strategy indicator calculation |
+| `BM_StrategyManagerTick` | Full tick processing with multiple strategies |
 
 ---
 
