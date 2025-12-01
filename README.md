@@ -453,8 +453,7 @@ cmake --build build
 - [x] Multithreading/concurrency (thread pool, async I/O, parallel parsing)
 - [x] Strategy layer (market making, momentum)
 - [x] Backtesting framework with simulated order flow
-- [ ] Symbol-sharded matching (multi-symbol parallel processing)
-- [ ] Strategy performance analytics
+- [x] Strategy performance analytics (win rate, drawdown, Sharpe ratio)
 
 ## License
 
