@@ -376,9 +376,9 @@ namespace Mercury {
         runStressBacktest();
 
         std::cout << "\n\n";
-        std::cout << "╔════════════════════════════════════════╗\n";
-        std::cout << "║  All Backtests Complete!               ║\n";
-        std::cout << "╚════════════════════════════════════════╝\n";
+        std::cout << "+----------------------------------------+\n";
+        std::cout << "|  All Backtests Complete!               |\n";
+        std::cout << "+----------------------------------------+\n";
         std::cout << "\nResults saved to build/ directory:\n";
         std::cout << "  - *_backtest_report.txt (detailed reports)\n";
         std::cout << "  - backtest_trades.csv (all trades)\n";

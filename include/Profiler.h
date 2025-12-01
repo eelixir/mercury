@@ -74,26 +74,26 @@ namespace Mercury {
 
         void print(const std::string& name) const {
             std::cout << std::fixed << std::setprecision(2);
-            std::cout << "╔═══════════════════════════════════════════════════════════╗\n";
-            std::cout << "║ " << std::left << std::setw(57) << name << " ║\n";
-            std::cout << "╠═══════════════════════════════════════════════════════════╣\n";
-            std::cout << "║ Samples: " << std::setw(49) << count << " ║\n";
-            std::cout << "╠═══════════════════════════════════════════════════════════╣\n";
-            std::cout << "║ Min:     " << std::setw(10) << minNanos << " ns  │  Mean:  " 
-                      << std::setw(12) << meanNanos << " ns     ║\n";
-            std::cout << "║ Max:     " << std::setw(10) << maxNanos << " ns  │  Stdev: " 
-                      << std::setw(12) << stddevNanos << " ns     ║\n";
-            std::cout << "╠═══════════════════════════════════════════════════════════╣\n";
-            std::cout << "║ Percentiles:                                              ║\n";
-            std::cout << "║   p50:   " << std::setw(10) << p50Nanos << " ns  (" 
-                      << std::setw(8) << (p50Nanos / 1000.0) << " µs)              ║\n";
-            std::cout << "║   p90:   " << std::setw(10) << p90Nanos << " ns  (" 
-                      << std::setw(8) << (p90Nanos / 1000.0) << " µs)              ║\n";
-            std::cout << "║   p99:   " << std::setw(10) << p99Nanos << " ns  (" 
-                      << std::setw(8) << (p99Nanos / 1000.0) << " µs)              ║\n";
-            std::cout << "║   p999:  " << std::setw(10) << p999Nanos << " ns  (" 
-                      << std::setw(8) << (p999Nanos / 1000.0) << " µs)              ║\n";
-            std::cout << "╚═══════════════════════════════════════════════════════════╝\n";
+            std::cout << "+-----------------------------------------------------------+\n";
+            std::cout << "| " << std::left << std::setw(57) << name << " |\n";
+            std::cout << "+-----------------------------------------------------------+\n";
+            std::cout << "| Samples: " << std::setw(49) << count << " |\n";
+            std::cout << "+-----------------------------------------------------------+\n";
+            std::cout << "| Min:     " << std::setw(10) << minNanos << " ns  |  Mean:  " 
+                      << std::setw(12) << meanNanos << " ns     |\n";
+            std::cout << "| Max:     " << std::setw(10) << maxNanos << " ns  |  Stdev: " 
+                      << std::setw(12) << stddevNanos << " ns     |\n";
+            std::cout << "+-----------------------------------------------------------+\n";
+            std::cout << "| Percentiles:                                              |\n";
+            std::cout << "|   p50:   " << std::setw(10) << p50Nanos << " ns  (" 
+                      << std::setw(8) << (p50Nanos / 1000.0) << " us)              |\n";
+            std::cout << "|   p90:   " << std::setw(10) << p90Nanos << " ns  (" 
+                      << std::setw(8) << (p90Nanos / 1000.0) << " us)              |\n";
+            std::cout << "|   p99:   " << std::setw(10) << p99Nanos << " ns  (" 
+                      << std::setw(8) << (p99Nanos / 1000.0) << " us)              |\n";
+            std::cout << "|   p999:  " << std::setw(10) << p999Nanos << " ns  (" 
+                      << std::setw(8) << (p999Nanos / 1000.0) << " us)              |\n";
+            std::cout << "+-----------------------------------------------------------+\n";
         }
     };
 
