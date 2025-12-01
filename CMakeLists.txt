@@ -98,6 +98,10 @@ set(MERCURY_HEADERS
     include/ThreadPool.h
     include/AsyncWriter.h
     include/ConcurrentMatchingEngine.h
+    include/Strategy.h
+    include/MarketMakingStrategy.h
+    include/MomentumStrategy.h
+    include/StrategyManager.h
 )
 target_sources(mercury_lib PRIVATE ${MERCURY_HEADERS})
 
@@ -124,6 +128,7 @@ add_executable(mercury_tests
     tests/risk_manager_test.cpp
     tests/pnl_tracker_test.cpp
     tests/concurrency_test.cpp
+    tests/strategy_test.cpp
 )
 
 target_link_libraries(mercury_tests

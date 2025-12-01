@@ -12,6 +12,7 @@
 #include "PnLTracker.h"
 #include "ThreadPool.h"
 #include "AsyncWriter.h"
+#include "StrategyDemo.h"
 
 // Helper function to convert ExecutionStatus to string
 std::string statusToString(Mercury::ExecutionStatus status) {
@@ -177,15 +178,25 @@ int main(int argc, char* argv[]) {
         bool useConcurrency = false;
         bool useAsyncWriters = false;
         
+        bool runStrategies = false;
+        
         for (int i = 1; i < argc; ++i) {
             std::string arg = argv[i];
             if (arg == "--concurrent" || arg == "-c") {
                 useConcurrency = true;
             } else if (arg == "--async-io" || arg == "-a") {
                 useAsyncWriters = true;
+            } else if (arg == "--strategies" || arg == "-s") {
+                runStrategies = true;
             } else if (arg[0] != '-') {
                 positionalArgs.push_back(arg);
             }
+        }
+        
+        // If strategies flag is set, run strategy demos
+        if (runStrategies) {
+            Mercury::runAllStrategyDemos();
+            return 0;
         }
         
         if (positionalArgs.empty()) {
@@ -567,7 +578,8 @@ int main(int argc, char* argv[]) {
         std::cout << "  pnl.csv        - Output file for P&L snapshots (default: pnl.csv)\n\n";
         std::cout << "Options:\n";
         std::cout << "  --concurrent, -c   Enable concurrent parsing and post-trade processing\n";
-        std::cout << "  --async-io, -a     Enable asynchronous I/O writers\n\n";
+        std::cout << "  --async-io, -a     Enable asynchronous I/O writers\n";
+        std::cout << "  --strategies, -s   Run trading strategy demos\n\n";
         runDemo();
     }
 
