@@ -467,21 +467,16 @@ cmake --build build
 ./build/mercury_tests --gtest_filter="StressTest.*" --gtest_print_time=1
 ```
 
-## Roadmap
+## Future Improvements
 
-- [x] Order book with std::map prototype
-- [x] CSV parsing and file I/O
-- [x] Matching engine (limit/market/cancel/modify)
-- [x] Google Test unit tests + stress tests
-- [x] Custom data structures (HashMap, IntrusiveList, ObjectPool)
-- [x] Profiling infrastructure (sanitizers, Google Benchmark)
-- [x] Cache-friendly design with memory pre-allocation
-- [x] Risk manager (position limits, exposure checks)
-- [x] PnL module (realized + unrealized)
-- [x] Multithreading/concurrency (thread pool, async I/O, parallel parsing)
-- [x] Strategy layer (market making, momentum)
-- [x] Backtesting framework with simulated order flow
-- [x] Strategy performance analytics (win rate, drawdown, Sharpe ratio)
+Mercury provides a solid foundation for order matching with production-quality performance. To evolve into a complete trading system, the following areas could be explored:
+
+- **Network Layer:** FIX protocol or WebSocket/REST APIs for external connectivity, session management with heartbeats and sequence numbers
+- **Persistence:** Write-Ahead Log (WAL) for crash recovery and durable order/trade storage
+- **Security:** Authentication, API keys, and role-based access control
+- **Market Structure:** Multi-symbol instrument registry, market data dissemination (L2/L3 feeds)
+- **Risk & Compliance:** Circuit breakers, price bands, audit trails, additional order types (Stop, Iceberg)
+- **Observability:** Prometheus metrics, health checks, structured logging, alerting
 
 ## License
 
