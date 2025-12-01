@@ -143,7 +143,7 @@ namespace Mercury {
         }
 
         // Helper to quickly check if an order is valid
-        bool isValid() const {
+        [[nodiscard]] bool isValid() const noexcept {
             return validate() == RejectReason::None;
         }
     };
@@ -157,7 +157,7 @@ namespace Mercury {
         uint64_t quantity = 0;
         uint64_t timestamp = 0;
 
-        bool isValid() const {
+        [[nodiscard]] bool isValid() const noexcept {
             return tradeId > 0 && buyOrderId > 0 && sellOrderId > 0 && 
                    price > 0 && quantity > 0;
         }
@@ -183,10 +183,10 @@ namespace Mercury {
         std::string message;
 
         // Helper to check if any fills occurred
-        bool hasFills() const { return !trades.empty(); }
+        [[nodiscard]] bool hasFills() const noexcept { return !trades.empty(); }
 
         // Helper to check if rejected
-        bool isRejected() const { return status == ExecutionStatus::Rejected; }
+        [[nodiscard]] bool isRejected() const noexcept { return status == ExecutionStatus::Rejected; }
 
         // Helper to create a rejection result
         static ExecutionResult makeRejection(uint64_t orderId, RejectReason reason) {

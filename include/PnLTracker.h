@@ -67,15 +67,19 @@ namespace Mercury {
             
             if (totalBuyQuantity > 0) {
                 avgBuyPrice = totalBuyCost / static_cast<int64_t>(totalBuyQuantity);
+            } else {
+                avgBuyPrice = 0;
             }
             if (totalSellQuantity > 0) {
                 avgSellPrice = totalSellProceeds / static_cast<int64_t>(totalSellQuantity);
+            } else {
+                avgSellPrice = 0;
             }
             
             // Calculate VWAP of current position
-            if (longQuantity > 0) {
+            if (longQuantity > 0 && longCostBasis != 0) {
                 vwapPosition = longCostBasis / longQuantity;
-            } else if (shortQuantity > 0) {
+            } else if (shortQuantity > 0 && shortCostBasis != 0) {
                 vwapPosition = shortCostBasis / shortQuantity;
             } else {
                 vwapPosition = 0;
@@ -110,6 +114,11 @@ namespace Mercury {
      * - FIFO-based realized P&L calculation
      * - Mark-to-market unrealized P&L calculation
      * - CSV output for P&L snapshots
+     * 
+     * Thread Safety:
+     * - This class is NOT thread-safe. External synchronization is required
+     *   when accessing from multiple threads. Use a mutex to protect all
+     *   method calls when used in concurrent environments.
      * 
      * Usage:
      *   PnLTracker tracker("pnl.csv");

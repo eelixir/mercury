@@ -103,7 +103,7 @@ namespace Mercury {
             event.eventType = RiskEventType::OrderQuantityLimitBreached;
             event.currentValue = 0;
             event.limitValue = static_cast<int64_t>(limits.maxOrderQuantity);
-            event.requestedValue = static_cast<int64_t>(order.quantity);
+            event.requestedValue = safeQuantityToInt64(order.quantity);
             std::ostringstream oss;
             oss << "Order quantity " << order.quantity << " exceeds limit " << limits.maxOrderQuantity;
             event.details = oss.str();
@@ -112,7 +112,7 @@ namespace Mercury {
 
         // Check order value limit (for limit orders)
         if (order.orderType == OrderType::Limit && order.price > 0) {
-            int64_t orderValue = order.price * static_cast<int64_t>(order.quantity);
+            int64_t orderValue = order.price * safeQuantityToInt64(order.quantity);
             if (orderValue > limits.maxOrderValue) {
                 event.eventType = RiskEventType::OrderValueLimitBreached;
                 event.currentValue = 0;
@@ -153,12 +153,15 @@ namespace Mercury {
         RiskEvent event;
         event.eventType = RiskEventType::Approved;
 
+        // Safely convert quantity with overflow protection
+        int64_t orderQty = safeQuantityToInt64(order.quantity);
+
         // Calculate potential new position after this order fills
         int64_t potentialNetPosition = position.netPosition();
         if (order.side == Side::Buy) {
-            potentialNetPosition += static_cast<int64_t>(order.quantity);
+            potentialNetPosition += orderQty;
         } else {
-            potentialNetPosition -= static_cast<int64_t>(order.quantity);
+            potentialNetPosition -= orderQty;
         }
 
         // Check if potential position exceeds limit
@@ -166,7 +169,7 @@ namespace Mercury {
             event.eventType = RiskEventType::PositionLimitBreached;
             event.currentValue = position.netPosition();
             event.limitValue = limits.maxPositionQuantity;
-            event.requestedValue = static_cast<int64_t>(order.quantity);
+            event.requestedValue = safeQuantityToInt64(order.quantity);
             std::ostringstream oss;
             oss << "Net position would be " << potentialNetPosition 
                 << ", exceeding limit +/-" << limits.maxPositionQuantity;
@@ -186,11 +189,11 @@ namespace Mercury {
         // For limit orders, use the order price
         int64_t orderPrice = order.price;
         if (order.orderType == OrderType::Market) {
-            // Use a conservative estimate - this should ideally be based on current market prices
-            orderPrice = 10000;  // Default market price estimate
+            // Use last known market price for exposure estimation
+            orderPrice = lastMarketPrice_;
         }
 
-        int64_t orderValue = orderPrice * static_cast<int64_t>(order.quantity);
+        int64_t orderValue = orderPrice * safeQuantityToInt64(order.quantity);
 
         // Calculate current gross exposure (simplified: using position * avg price)
         // In a real system, this would use mark-to-market prices
@@ -444,19 +447,49 @@ namespace Mercury {
         file_ << "event_id,timestamp,order_id,client_id,event_type,current_value,limit_value,requested_value,details\n";
     }
 
+    /**
+     * Properly escape a string for CSV output
+     * - Wraps in quotes if contains special characters
+     * - Escapes embedded quotes by doubling them
+     */
+    static std::string escapeCsvField(const std::string& field) {
+        bool needsQuoting = false;
+        
+        // Check if field needs quoting
+        for (char c : field) {
+            if (c == ',' || c == '"' || c == '\n' || c == '\r' || c == '=' || c == '+' || c == '-' || c == '@') {
+                needsQuoting = true;
+                break;
+            }
+        }
+        
+        if (!needsQuoting) {
+            return field;
+        }
+        
+        // Escape by wrapping in quotes and doubling any embedded quotes
+        std::string result;
+        result.reserve(field.size() + 4);
+        result += '"';
+        for (char c : field) {
+            if (c == '"') {
+                result += "\"\"";  // Double quotes
+            } else {
+                result += c;
+            }
+        }
+        result += '"';
+        return result;
+    }
+
     bool RiskEventWriter::writeEvent(const RiskEvent& event) {
         if (!file_.is_open()) {
             std::cerr << "RiskEventWriter: File not open\n";
             return false;
         }
 
-        // Escape details string for CSV (replace commas and newlines)
-        std::string safeDetails = event.details;
-        for (char& c : safeDetails) {
-            if (c == ',' || c == '\n' || c == '\r') {
-                c = ' ';
-            }
-        }
+        // Properly escape the details field for CSV
+        std::string safeDetails = escapeCsvField(event.details);
 
         file_ << event.eventId << ","
               << event.timestamp << ","

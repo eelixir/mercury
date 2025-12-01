@@ -202,6 +202,10 @@ namespace Mercury {
         /**
          * Get orders at a specific price level
          * Returns a vector copy for API compatibility
+         * 
+         * Note: This function copies orders for safety. For performance-critical
+         * internal use, prefer getBidLevel()/getAskLevel() which return direct
+         * pointers to iterate without copying.
          */
         std::vector<Order> getOrdersAtPrice(int64_t price, Side side) const {
             std::vector<Order> result;
@@ -291,34 +295,34 @@ namespace Mercury {
         // Book State Queries
         // =====================================================================
 
-        bool hasBids() const { return !bids_.empty(); }
-        bool hasAsks() const { return !asks_.empty(); }
+        [[nodiscard]] bool hasBids() const noexcept { return !bids_.empty(); }
+        [[nodiscard]] bool hasAsks() const noexcept { return !asks_.empty(); }
 
-        int64_t getBestBid() const {
+        [[nodiscard]] int64_t getBestBid() const noexcept {
             return bids_.empty() ? std::numeric_limits<int64_t>::min() : bids_.begin()->first;
         }
 
-        int64_t getBestAsk() const {
+        [[nodiscard]] int64_t getBestAsk() const noexcept {
             return asks_.empty() ? std::numeric_limits<int64_t>::max() : asks_.begin()->first;
         }
 
-        std::optional<int64_t> tryGetBestBid() const {
+        [[nodiscard]] std::optional<int64_t> tryGetBestBid() const {
             return bids_.empty() ? std::nullopt : std::optional<int64_t>(bids_.begin()->first);
         }
 
-        std::optional<int64_t> tryGetBestAsk() const {
+        [[nodiscard]] std::optional<int64_t> tryGetBestAsk() const {
             return asks_.empty() ? std::nullopt : std::optional<int64_t>(asks_.begin()->first);
         }
 
-        uint64_t getBestBidQuantity() const {
+        [[nodiscard]] uint64_t getBestBidQuantity() const noexcept {
             return bids_.empty() ? 0 : bids_.begin()->second.quantity();
         }
 
-        uint64_t getBestAskQuantity() const {
+        [[nodiscard]] uint64_t getBestAskQuantity() const noexcept {
             return asks_.empty() ? 0 : asks_.begin()->second.quantity();
         }
 
-        uint64_t getQuantityAtPrice(int64_t price, Side side) const {
+        [[nodiscard]] uint64_t getQuantityAtPrice(int64_t price, Side side) const {
             if (side == Side::Buy) {
                 auto it = bids_.find(price);
                 return (it != bids_.end()) ? it->second.quantity() : 0;
@@ -328,20 +332,20 @@ namespace Mercury {
             }
         }
 
-        size_t getOrderCount() const { return orderLookup_.size(); }
-        size_t getBidLevelCount() const { return bids_.size(); }
-        size_t getAskLevelCount() const { return asks_.size(); }
+        [[nodiscard]] size_t getOrderCount() const noexcept { return orderLookup_.size(); }
+        [[nodiscard]] size_t getBidLevelCount() const noexcept { return bids_.size(); }
+        [[nodiscard]] size_t getAskLevelCount() const noexcept { return asks_.size(); }
 
-        bool hasOrder(uint64_t orderId) const {
+        [[nodiscard]] bool hasOrder(uint64_t orderId) const {
             return orderLookup_.contains(orderId);
         }
 
-        int64_t getSpread() const {
+        [[nodiscard]] int64_t getSpread() const noexcept {
             if (bids_.empty() || asks_.empty()) return 0;
             return asks_.begin()->first - bids_.begin()->first;
         }
 
-        int64_t getMidPrice() const {
+        [[nodiscard]] int64_t getMidPrice() const noexcept {
             if (bids_.empty() || asks_.empty()) return 0;
             return (asks_.begin()->first + bids_.begin()->first) / 2;
         }

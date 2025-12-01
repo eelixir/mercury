@@ -23,6 +23,13 @@ namespace Mercury {
      * - find: O(1)
      * - erase: O(1)
      * 
+     * Thread Safety:
+     * - This class is NOT thread-safe. External synchronization required.
+     * 
+     * Iterator Validity:
+     * - Iterators are invalidated by insert(), erase(), clear(), and rehash().
+     * - Do not modify the map while iterating.
+     * 
      * This is optimized for order ID lookups which are critical path in trading.
      */
     template<typename Key, typename Value, typename Hash = std::hash<Key>>
@@ -180,10 +187,10 @@ namespace Mercury {
         const_iterator cend() const { return const_iterator(entries_, capacity_, capacity_); }
 
         // Capacity
-        bool empty() const { return size_ == 0; }
-        size_t size() const { return size_; }
-        size_t capacity() const { return capacity_; }
-        float loadFactor() const { return static_cast<float>(size_) / capacity_; }
+        [[nodiscard]] bool empty() const noexcept { return size_ == 0; }
+        [[nodiscard]] size_t size() const noexcept { return size_; }
+        [[nodiscard]] size_t capacity() const noexcept { return capacity_; }
+        [[nodiscard]] float loadFactor() const noexcept { return static_cast<float>(size_) / capacity_; }
 
         // Insert or update
         void insert(const Key& key, const Value& value) {
@@ -211,7 +218,7 @@ namespace Mercury {
         }
 
         // Find - returns pointer to value or nullptr
-        Value* find(const Key& key) {
+        [[nodiscard]] Value* find(const Key& key) {
             size_t index = findIndex(key);
             if (index != capacity_) {
                 return &entries_[index].value;
@@ -219,7 +226,7 @@ namespace Mercury {
             return nullptr;
         }
 
-        const Value* find(const Key& key) const {
+        [[nodiscard]] const Value* find(const Key& key) const {
             size_t index = findIndex(key);
             if (index != capacity_) {
                 return &entries_[index].value;
@@ -228,7 +235,7 @@ namespace Mercury {
         }
 
         // Contains check
-        bool contains(const Key& key) const {
+        [[nodiscard]] bool contains(const Key& key) const {
             return findIndex(key) != capacity_;
         }
 
@@ -247,7 +254,7 @@ namespace Mercury {
         }
 
         // Get with optional
-        std::optional<Value> get(const Key& key) const {
+        [[nodiscard]] std::optional<Value> get(const Key& key) const {
             const Value* ptr = find(key);
             if (ptr) {
                 return *ptr;

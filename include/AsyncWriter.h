@@ -38,14 +38,18 @@ namespace Mercury {
     public:
         static constexpr size_t DEFAULT_BUFFER_SIZE = 8192;
         static constexpr size_t DEFAULT_QUEUE_CAPACITY = 1000;
+        static constexpr size_t DEFAULT_MAX_QUEUE_SIZE = 10000;  // Max pending buffers
 
         explicit AsyncWriter(const std::string& filepath, 
-                            size_t bufferSize = DEFAULT_BUFFER_SIZE)
+                            size_t bufferSize = DEFAULT_BUFFER_SIZE,
+                            size_t maxQueueSize = DEFAULT_MAX_QUEUE_SIZE)
             : filepath_(filepath)
             , bufferSize_(bufferSize)
+            , maxQueueSize_(maxQueueSize)
             , stop_(false)
             , writeCount_(0)
-            , bytesWritten_(0) {
+            , bytesWritten_(0)
+            , droppedCount_(0) {
             buffer_.reserve(bufferSize);
         }
 
@@ -118,9 +122,16 @@ namespace Mercury {
         /**
          * Write a string to the file (async)
          * @param data The data to write
+         * @return true if data was queued, false if dropped due to overflow
          */
-        void write(const std::string& data) {
+        bool write(const std::string& data) {
             std::unique_lock<std::mutex> lock(mutex_);
+            
+            // Check for queue overflow - drop writes if queue is too large
+            if (queue_.size() >= maxQueueSize_) {
+                ++droppedCount_;
+                return false;  // Drop the write to prevent unbounded memory growth
+            }
             
             buffer_ += data;
             ++writeCount_;
@@ -133,6 +144,7 @@ namespace Mercury {
                 buffer_.reserve(bufferSize_);
                 condition_.notify_one();
             }
+            return true;
         }
 
         /**
@@ -173,17 +185,23 @@ namespace Mercury {
          */
         size_t getWriteCount() const { return writeCount_; }
         size_t getBytesWritten() const { return bytesWritten_; }
+        size_t getDroppedCount() const { return droppedCount_; }
+        size_t getQueueSize() const { 
+            std::unique_lock<std::mutex> lock(mutex_);
+            return queue_.size(); 
+        }
         const std::string& getFilePath() const { return filepath_; }
 
     private:
         std::string filepath_;
         std::ofstream file_;
         size_t bufferSize_;
+        size_t maxQueueSize_;
 
         std::string buffer_;
         std::queue<std::string> queue_;
         
-        std::mutex mutex_;
+        mutable std::mutex mutex_;
         std::condition_variable condition_;
         std::condition_variable flushCondition_;
         std::thread writerThread_;
@@ -191,6 +209,7 @@ namespace Mercury {
         std::atomic<bool> stop_;
         std::atomic<size_t> writeCount_;
         std::atomic<size_t> bytesWritten_;
+        std::atomic<size_t> droppedCount_;
 
         void writerLoop() {
             while (true) {

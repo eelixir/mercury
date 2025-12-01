@@ -588,9 +588,19 @@ namespace Mercury {
                 }
             }
             
-            // Note: Trade callbacks are now handled by StrategyManager.
-            // If we need additional logging, we should chain callbacks, not replace them.
-            // The trade logging is now done via PnLTracker integration.
+            // Set up trade callback for logging trades to file
+            if (config_.writeTradeLog && tradeLogFile_.is_open()) {
+                engine_->setTradeCallback([this](const Trade& trade) {
+                    if (tradeLogFile_.is_open()) {
+                        tradeLogFile_ << trade.tradeId << ","
+                                     << trade.timestamp << ","
+                                     << trade.buyOrderId << ","
+                                     << trade.sellOrderId << ","
+                                     << trade.price << ","
+                                     << trade.quantity << "\n";
+                    }
+                });
+            }
         }
 
         void closeOutputFiles() {

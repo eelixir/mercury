@@ -75,7 +75,7 @@ namespace Mercury {
          */
         void setMode(Mode mode) {
             std::unique_lock<std::shared_mutex> lock(mutex_);
-            mode_ = mode;
+            mode_.store(mode, std::memory_order_release);
             
             if (mode == Mode::AsyncCallbacks && !callbackPool_) {
                 callbackPool_ = std::make_unique<ThreadPool>(2);
@@ -95,7 +95,7 @@ namespace Mercury {
             }
             
             numShards_ = numShards;
-            mode_ = Mode::SymbolSharded;
+            mode_.store(Mode::SymbolSharded, std::memory_order_release);
             
             // Create sharded engines
             engines_.clear();
@@ -113,11 +113,14 @@ namespace Mercury {
          * Submit a single order (thread-safe)
          */
         ExecutionResult submitOrder(Order order) {
-            if (mode_ == Mode::SingleThreaded) {
+            // Read mode atomically first to determine locking strategy
+            Mode currentMode = mode_.load(std::memory_order_acquire);
+            
+            if (currentMode == Mode::SingleThreaded) {
                 std::unique_lock<std::shared_mutex> lock(mutex_);
                 return submitOrderInternal(order, 0);
             }
-            else if (mode_ == Mode::SymbolSharded) {
+            else if (currentMode == Mode::SymbolSharded) {
                 size_t shard = getShardForOrder(order);
                 std::lock_guard<std::mutex> lock(*shardLocks_[shard]);
                 return submitOrderInternal(order, shard);
@@ -148,7 +151,8 @@ namespace Mercury {
                          std::vector<ExecutionResult>& results) {
             results.resize(orders.size());
             
-            if (mode_ == Mode::SingleThreaded || mode_ == Mode::AsyncCallbacks) {
+            Mode currentMode = mode_.load(std::memory_order_acquire);
+            if (currentMode == Mode::SingleThreaded || currentMode == Mode::AsyncCallbacks) {
                 std::unique_lock<std::shared_mutex> lock(mutex_);
                 for (size_t i = 0; i < orders.size(); ++i) {
                     results[i] = submitOrderInternal(orders[i], 0);
@@ -191,7 +195,7 @@ namespace Mercury {
         void submitOrdersParallel(const std::vector<Order>& orders,
                                   std::vector<ExecutionResult>& results,
                                   ThreadPool& pool) {
-            if (mode_ != Mode::SymbolSharded) {
+            if (mode_.load(std::memory_order_acquire) != Mode::SymbolSharded) {
                 // Fall back to serial processing
                 submitOrders(orders, results);
                 return;
@@ -232,7 +236,8 @@ namespace Mercury {
          * Cancel an order by ID
          */
         ExecutionResult cancelOrder(uint64_t orderId, uint64_t symbolId = 0) {
-            if (mode_ == Mode::SingleThreaded || mode_ == Mode::AsyncCallbacks) {
+            Mode currentMode = mode_.load(std::memory_order_acquire);
+            if (currentMode == Mode::SingleThreaded || currentMode == Mode::AsyncCallbacks) {
                 std::unique_lock<std::shared_mutex> lock(mutex_);
                 return engines_[0]->cancelOrder(orderId);
             }
@@ -304,7 +309,7 @@ namespace Mercury {
         /**
          * Get processing mode
          */
-        Mode getMode() const { return mode_; }
+        Mode getMode() const { return mode_.load(std::memory_order_acquire); }
 
         /**
          * Shutdown the engine (waits for pending async operations)
@@ -317,7 +322,7 @@ namespace Mercury {
         }
 
     private:
-        Mode mode_;
+        std::atomic<Mode> mode_;
         size_t numShards_;
         
         std::vector<std::unique_ptr<MatchingEngine>> engines_;

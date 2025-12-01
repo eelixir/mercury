@@ -7,6 +7,18 @@
 #include <cstdint>
 #include <functional>
 #include <atomic>
+#include <limits>
+
+namespace Mercury {
+    /**
+     * Safely convert uint64_t quantity to int64_t with overflow protection
+     * Returns INT64_MAX if value would overflow
+     */
+    inline int64_t safeQuantityToInt64(uint64_t qty) {
+        constexpr uint64_t MAX_SAFE = static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
+        return (qty > MAX_SAFE) ? std::numeric_limits<int64_t>::max() : static_cast<int64_t>(qty);
+    }
+}
 
 namespace Mercury {
 
@@ -200,6 +212,18 @@ namespace Mercury {
         void resetDailyCounters();
 
         /**
+         * Set last known market price (used for market order exposure calculation)
+         * @param price The current market price
+         */
+        void setLastMarketPrice(int64_t price) { lastMarketPrice_ = price; }
+
+        /**
+         * Get last known market price
+         * @return The last set market price (or default if never set)
+         */
+        int64_t getLastMarketPrice() const { return lastMarketPrice_; }
+
+        /**
          * Get current timestamp
          */
         uint64_t getTimestamp() { return ++currentTimestamp_; }
@@ -217,6 +241,7 @@ namespace Mercury {
 
         std::atomic<uint64_t> eventIdCounter_{0};
         std::atomic<uint64_t> currentTimestamp_{0};
+        int64_t lastMarketPrice_ = 10000;  // Default fallback price
         
         uint64_t approvedCount_ = 0;
         uint64_t rejectedCount_ = 0;

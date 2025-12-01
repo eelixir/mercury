@@ -147,7 +147,7 @@ mercury/
 - C++17 compiler (GCC 9+, Clang 10+, MSVC 2019+)
 - CMake 3.10+
 
-### Build
+### Build (Linux/macOS)
 
 ```bash
 # Standard build
@@ -160,6 +160,34 @@ cmake --build build
 
 # With benchmarks
 cmake -B build -DMERCURY_BUILD_BENCHMARKS=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+```
+
+### Build (Windows with MSVC)
+
+```powershell
+# Standard build (from Developer PowerShell or Command Prompt)
+cmake -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release
+
+# With AddressSanitizer (MSVC 2019 16.9+ required)
+cmake -B build -G "Visual Studio 17 2022" -A x64 -DMERCURY_ENABLE_ASAN=ON
+cmake --build build --config Debug
+
+# With benchmarks
+cmake -B build -G "Visual Studio 17 2022" -A x64 -DMERCURY_BUILD_BENCHMARKS=ON
+cmake --build build --config Release
+```
+
+### Build (Windows with MinGW/MSYS2)
+
+```bash
+# Using MSYS2 UCRT64 environment
+cmake -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+
+# With sanitizers
+cmake -B build -G "MinGW Makefiles" -DMERCURY_ENABLE_ASAN=ON -DCMAKE_BUILD_TYPE=Debug
 cmake --build build
 ```
 

@@ -23,21 +23,40 @@ option(MERCURY_BUILD_BENCHMARKS "Build Google Benchmark micro-benchmarks" OFF)
 # COMPILER FLAGS
 # ============================================================================
 
-# Release with debug info for profiling
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG")
+# Compiler-specific settings
+if(MSVC)
+    # MSVC-specific flags
+    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/O2 /Zi /DNDEBUG")
+    add_compile_options(/W4)  # High warning level
+    
+    # AddressSanitizer (MSVC 2019 16.9+ required)
+    if(MERCURY_ENABLE_ASAN)
+        message(STATUS "AddressSanitizer enabled (MSVC)")
+        add_compile_options(/fsanitize=address)
+        # Note: MSVC ASAN doesn't support all features of GCC/Clang ASAN
+    endif()
+    
+    # UBSAN not supported on MSVC - warn user
+    if(MERCURY_ENABLE_UBSAN)
+        message(WARNING "UndefinedBehaviorSanitizer is not supported on MSVC. Ignoring MERCURY_ENABLE_UBSAN.")
+    endif()
+else()
+    # GCC/Clang flags
+    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG")
+    
+    # AddressSanitizer - detects memory errors (use-after-free, buffer overflow)
+    if(MERCURY_ENABLE_ASAN)
+        message(STATUS "AddressSanitizer enabled")
+        add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+        add_link_options(-fsanitize=address)
+    endif()
 
-# AddressSanitizer - detects memory errors (use-after-free, buffer overflow)
-if(MERCURY_ENABLE_ASAN)
-    message(STATUS "AddressSanitizer enabled")
-    add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
-    add_link_options(-fsanitize=address)
-endif()
-
-# UndefinedBehaviorSanitizer - detects undefined behavior
-if(MERCURY_ENABLE_UBSAN)
-    message(STATUS "UndefinedBehaviorSanitizer enabled")
-    add_compile_options(-fsanitize=undefined)
-    add_link_options(-fsanitize=undefined)
+    # UndefinedBehaviorSanitizer - detects undefined behavior
+    if(MERCURY_ENABLE_UBSAN)
+        message(STATUS "UndefinedBehaviorSanitizer enabled")
+        add_compile_options(-fsanitize=undefined)
+        add_link_options(-fsanitize=undefined)
+    endif()
 endif()
 
 # Built-in profiling instrumentation
