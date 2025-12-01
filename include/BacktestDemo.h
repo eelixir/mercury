@@ -35,8 +35,10 @@ namespace Mercury {
         config.orderFlow.volatility = 0.01;  // 1% volatility
         config.orderFlow.minOrderSize = 20;
         config.orderFlow.maxOrderSize = 100;
-        config.orderFlow.marketOrderRatio = 0.4;  // 40% market orders
+        config.orderFlow.marketOrderRatio = 0.5;  // 50% market orders (good for MM fills)
         config.orderFlow.meanReversionSpeed = 0.1;
+        config.orderFlow.minSpread = 10;          // External orders wider than MM
+        config.orderFlow.maxSpread = 20;          // So MM quotes are more competitive
         config.orderFlow.seed = 12345;
 
         // Create backtester
@@ -101,16 +103,16 @@ namespace Mercury {
         // Configure momentum strategy
         MomentumConfig momConfig;
         momConfig.name = "Momentum";
-        momConfig.shortPeriod = 10;
-        momConfig.longPeriod = 30;
-        momConfig.entryThreshold = 0.015;      // 1.5% momentum to enter
-        momConfig.exitThreshold = 0.005;       // 0.5% to exit
+        momConfig.shortPeriod = 5;             // Faster signals
+        momConfig.longPeriod = 15;
+        momConfig.entryThreshold = 0.01;       // 1% momentum to enter (lower)
+        momConfig.exitThreshold = 0.003;       // 0.3% to exit
         momConfig.baseQuantity = 50;
         momConfig.stopLossPct = 0.03;          // 3% stop loss
         momConfig.takeProfitPct = 0.06;        // 6% take profit
-        momConfig.confirmationBars = 3;
+        momConfig.confirmationBars = 2;        // Faster confirmation
         momConfig.requireVolumeConfirm = false;
-        momConfig.useTrendFilter = true;
+        momConfig.useTrendFilter = false;      // Disable trend filter for testing
         momConfig.useMarketOrders = true;
         
         backtester.addStrategy(std::make_unique<MomentumStrategy>(momConfig));

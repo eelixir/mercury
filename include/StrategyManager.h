@@ -411,8 +411,8 @@ namespace Mercury {
                     return;
             }
 
-            // Risk check
-            if (config_.enableRiskChecks && riskManager_) {
+            // Risk check - bypass for closing orders (exits should always be allowed)
+            if (config_.enableRiskChecks && riskManager_ && !isClosingOrder) {
                 auto riskEvent = riskManager_->checkOrder(order);
                 if (riskEvent.isRejected()) {
                     strategyMetrics_[strategyName].ordersRejected++;

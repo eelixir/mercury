@@ -316,11 +316,18 @@ TEST_F(MomentumStrategyTest, ExitOnStopLoss) {
 TEST_F(MomentumStrategyTest, PositionUpdateTracking) {
     MomentumStrategy strategy(config);
     
-    strategy.updatePosition(Side::Buy, 50, 100);
+    // Simulate StrategyManager behavior: update state then call updatePosition
+    auto& state = strategy.getState();
+    state.netPosition = 50;  // StrategyManager updates this
+    strategy.updatePosition(Side::Buy, 50, 100);  // Strategy tracks entry
+    
     EXPECT_EQ(strategy.getState().netPosition, 50);
     EXPECT_EQ(strategy.getEntryPrice(), 100);
     
+    // Close position
+    state.netPosition = 0;  // StrategyManager updates this
     strategy.updatePosition(Side::Sell, 50, 105);
+    
     EXPECT_EQ(strategy.getState().netPosition, 0);
     EXPECT_EQ(strategy.getEntryPrice(), 0);  // Position closed
 }
@@ -334,6 +341,10 @@ TEST_F(MomentumStrategyTest, ResetClearsState) {
         prices.push_back(100 + i);
     }
     feedPrices(strategy, prices);
+    
+    // Simulate position update (as StrategyManager would do)
+    auto& state = strategy.getState();
+    state.netPosition = 100;
     strategy.updatePosition(Side::Buy, 100, 100);
     
     EXPECT_EQ(strategy.getState().netPosition, 100);

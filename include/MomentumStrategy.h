@@ -48,8 +48,8 @@ namespace Mercury {
         
         MomentumConfig() {
             name = "Momentum";
-            maxPosition = 500;
-            maxOrderQuantity = 200;
+            maxPosition = 200;        // Lower max position for risk control
+            maxOrderQuantity = 100;   // Smaller orders
         }
     };
 
@@ -141,6 +141,7 @@ namespace Mercury {
 
             // Store tick and update price bars
             lastTick_ = tick;
+            currentTick_++;
             updatePriceBars(tick);
 
             // Need enough data for calculations
@@ -190,26 +191,32 @@ namespace Mercury {
         }
 
         /**
-         * Update position after fill
+         * Update position tracking after fill
+         * Note: Position (state_.netPosition) is already updated by StrategyManager
+         * This method only handles strategy-specific tracking like entry price
          */
         void updatePosition(Side side, uint64_t filledQty, int64_t price) {
+            // Track entry price for stop loss / take profit
             if (side == Side::Buy) {
-                state_.netPosition += static_cast<int64_t>(filledQty);
-                state_.longPosition += static_cast<int64_t>(filledQty);
-                
-                // Record entry for new position
+                // Record entry for new long position
                 if (state_.netPosition > 0 && entryPrice_ == 0) {
                     entryPrice_ = price;
                     highWaterMark_ = price;
                 }
+                // Update high water mark
+                if (state_.netPosition > 0) {
+                    highWaterMark_ = std::max(highWaterMark_, price);
+                }
             } else {
-                state_.netPosition -= static_cast<int64_t>(filledQty);
-                state_.shortPosition += static_cast<int64_t>(filledQty);
-                
                 // Record entry for new short
                 if (state_.netPosition < 0 && entryPrice_ == 0) {
                     entryPrice_ = price;
                     lowWaterMark_ = price;
+                }
+                // Update low water mark
+                if (state_.netPosition < 0) {
+                    if (lowWaterMark_ == 0) lowWaterMark_ = price;
+                    else lowWaterMark_ = std::min(lowWaterMark_, price);
                 }
             }
 
@@ -232,6 +239,9 @@ namespace Mercury {
             entryPrice_ = 0;
             highWaterMark_ = 0;
             lowWaterMark_ = 0;
+            entryTick_ = 0;
+            currentTick_ = 0;
+            entryHistogram_ = 0.0;
             lastIndicators_ = MomentumIndicators{};
             signalConfirmCount_ = 0;
             lastSignalSide_ = Side::Buy;
@@ -259,6 +269,9 @@ namespace Mercury {
         int64_t entryPrice_ = 0;
         int64_t highWaterMark_ = 0;
         int64_t lowWaterMark_ = 0;
+        uint64_t entryTick_ = 0;           // Tick when position was opened
+        uint64_t currentTick_ = 0;          // Current tick counter
+        double entryHistogram_ = 0.0;       // MACD histogram at entry
         
         // Indicators
         MomentumIndicators lastIndicators_;
@@ -479,10 +492,17 @@ namespace Mercury {
 
                 if (signalConfirmCount_ >= momConfig_.confirmationBars) {
                     uint64_t qty = calculatePositionSize(ind.momentum);
-                    int64_t price = momConfig_.useMarketOrders ? 0 : 
-                                    tick.askPrice + momConfig_.limitOffset;
+                    
+                    // Respect max position limit
+                    int64_t maxPos = static_cast<int64_t>(config_.maxPosition);
+                    if (state_.netPosition + static_cast<int64_t>(qty) > maxPos) {
+                        qty = static_cast<uint64_t>(std::max(int64_t(0), maxPos - state_.netPosition));
+                    }
+                    
+                    if (qty > 0) {
+                        int64_t price = momConfig_.useMarketOrders ? 0 : 
+                                        tick.askPrice + momConfig_.limitOffset;
 
-                    if (checkRiskLimits(Side::Buy, price, qty)) {
                         StrategySignal signal;
                         signal.type = SignalType::Buy;
                         signal.price = price;
@@ -490,6 +510,10 @@ namespace Mercury {
                         signal.confidence = calculateConfidence(ind);
                         signal.reason = formatReason("Long entry", ind);
                         signals.push_back(signal);
+                        
+                        // Record entry state
+                        entryTick_ = currentTick_;
+                        entryHistogram_ = ind.histogram;
                     }
                 }
             }
@@ -504,10 +528,17 @@ namespace Mercury {
 
                 if (signalConfirmCount_ >= momConfig_.confirmationBars) {
                     uint64_t qty = calculatePositionSize(std::abs(ind.momentum));
-                    int64_t price = momConfig_.useMarketOrders ? 0 : 
-                                    tick.bidPrice - momConfig_.limitOffset;
+                    
+                    // Respect max position limit for shorts
+                    int64_t maxPos = static_cast<int64_t>(config_.maxPosition);
+                    if (-state_.netPosition + static_cast<int64_t>(qty) > maxPos) {
+                        qty = static_cast<uint64_t>(std::max(int64_t(0), maxPos + state_.netPosition));
+                    }
+                    
+                    if (qty > 0) {
+                        int64_t price = momConfig_.useMarketOrders ? 0 : 
+                                        tick.bidPrice - momConfig_.limitOffset;
 
-                    if (checkRiskLimits(Side::Sell, price, qty)) {
                         StrategySignal signal;
                         signal.type = SignalType::Sell;
                         signal.price = price;
@@ -515,6 +546,10 @@ namespace Mercury {
                         signal.confidence = calculateConfidence(ind);
                         signal.reason = formatReason("Short entry", ind);
                         signals.push_back(signal);
+                        
+                        // Record entry state
+                        entryTick_ = currentTick_;
+                        entryHistogram_ = ind.histogram;
                     }
                 }
             } else {
@@ -532,13 +567,17 @@ namespace Mercury {
             
             std::vector<StrategySignal> signals;
             int64_t currentPrice = tick.midPrice();
+            
+            // Minimum hold period (10 ticks) to let trades develop
+            uint64_t ticksHeld = currentTick_ - entryTick_;
+            bool pastMinHold = ticksHeld >= 10;
 
             // Long position exit conditions
             if (state_.netPosition > 0) {
                 bool shouldExit = false;
                 std::string reason;
 
-                // Check stop loss
+                // Check stop loss (always active)
                 if (entryPrice_ > 0) {
                     double pnlPct = static_cast<double>(currentPrice - entryPrice_) / 
                                     static_cast<double>(entryPrice_);
@@ -548,8 +587,8 @@ namespace Mercury {
                         reason = "Stop loss triggered";
                     }
 
-                    // Check trailing stop
-                    if (momConfig_.useTrailingStop && highWaterMark_ > entryPrice_) {
+                    // Check trailing stop (only after min hold)
+                    if (pastMinHold && momConfig_.useTrailingStop && highWaterMark_ > entryPrice_) {
                         double trailingDrop = static_cast<double>(highWaterMark_ - currentPrice) /
                                               static_cast<double>(highWaterMark_);
                         if (trailingDrop >= momConfig_.trailingStopPct) {
@@ -565,16 +604,19 @@ namespace Mercury {
                     }
                 }
 
-                // Check momentum reversal
-                if (ind.momentum < -momConfig_.exitThreshold) {
-                    shouldExit = true;
-                    reason = "Momentum reversal";
-                }
+                // Momentum-based exits only after minimum hold period
+                if (pastMinHold) {
+                    // Check strong momentum reversal (3x exit threshold)
+                    if (ind.momentum < -momConfig_.exitThreshold * 3) {
+                        shouldExit = true;
+                        reason = "Strong momentum reversal";
+                    }
 
-                // MACD crossover bearish
-                if (ind.histogram < 0 && std::abs(ind.histogram) > 0.001) {
-                    shouldExit = true;
-                    reason = "MACD bearish crossover";
+                    // MACD histogram flip with magnitude (must flip significantly from entry)
+                    if (entryHistogram_ > 0 && ind.histogram < -entryHistogram_ * 0.5) {
+                        shouldExit = true;
+                        reason = "MACD bearish crossover";
+                    }
                 }
 
                 if (shouldExit) {
@@ -593,7 +635,7 @@ namespace Mercury {
                 bool shouldExit = false;
                 std::string reason;
 
-                // Check stop loss
+                // Check stop loss (always active)
                 if (entryPrice_ > 0) {
                     double pnlPct = static_cast<double>(entryPrice_ - currentPrice) / 
                                     static_cast<double>(entryPrice_);
@@ -603,8 +645,8 @@ namespace Mercury {
                         reason = "Stop loss triggered";
                     }
 
-                    // Check trailing stop for short
-                    if (momConfig_.useTrailingStop && lowWaterMark_ > 0) {
+                    // Check trailing stop for short (only after min hold)
+                    if (pastMinHold && momConfig_.useTrailingStop && lowWaterMark_ > 0) {
                         double trailingRise = static_cast<double>(currentPrice - lowWaterMark_) /
                                               static_cast<double>(lowWaterMark_);
                         if (trailingRise >= momConfig_.trailingStopPct) {
@@ -620,16 +662,19 @@ namespace Mercury {
                     }
                 }
 
-                // Check momentum reversal
-                if (ind.momentum > momConfig_.exitThreshold) {
-                    shouldExit = true;
-                    reason = "Momentum reversal";
-                }
+                // Momentum-based exits only after minimum hold period
+                if (pastMinHold) {
+                    // Check strong momentum reversal (3x exit threshold)
+                    if (ind.momentum > momConfig_.exitThreshold * 3) {
+                        shouldExit = true;
+                        reason = "Strong momentum reversal";
+                    }
 
-                // MACD crossover bullish
-                if (ind.histogram > 0 && ind.histogram > 0.001) {
-                    shouldExit = true;
-                    reason = "MACD bullish crossover";
+                    // MACD histogram flip with magnitude (must flip significantly from entry)
+                    if (entryHistogram_ < 0 && ind.histogram > -entryHistogram_ * 0.5) {
+                        shouldExit = true;
+                        reason = "MACD bullish crossover";
+                    }
                 }
 
                 if (shouldExit) {
