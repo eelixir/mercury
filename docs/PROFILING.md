@@ -185,6 +185,51 @@ Mercury includes thread-safe primitives for parallel processing:
 
 ---
 
+## Strategy Components
+
+Mercury includes a strategy layer for developing and testing trading algorithms:
+
+### Strategy Base Class
+- **Location:** `include/Strategy.h`
+- **Use:** Abstract base for all strategies
+- **Key Methods:** `onMarketTick()`, `onOrderFilled()`, `onTradeExecuted()`
+- **Benefits:** Consistent interface, lifecycle hooks
+
+### MarketMakingStrategy
+- **Location:** `include/MarketMakingStrategy.h`
+- **Use:** Provides liquidity via bid-ask quotes
+- **Features:** Inventory skew, dynamic spread, quote refresh
+- **Config:** `quoteQuantity`, `minSpread`, `maxSpread`, `maxInventory`, `fadePerUnit`
+
+### MomentumStrategy
+- **Location:** `include/MomentumStrategy.h`
+- **Use:** Trend-following with technical indicators
+- **Indicators:** SMA, EMA, MACD, RSI
+- **Config:** `shortPeriod`, `longPeriod`, `entryThreshold`, `stopLossPercent`
+
+### StrategyManager
+- **Location:** `include/StrategyManager.h`
+- **Use:** Orchestrates multiple strategies
+- **Features:**
+  - Feeds market data to strategies
+  - Executes signals through matching engine
+  - Tracks per-strategy metrics and P&L
+- **API:** `addStrategy()`, `onMarketTick()`, `printSummary()`
+
+For detailed strategy documentation, see [STRATEGIES.md](STRATEGIES.md).
+
+## Running Demos and Strategies
+
+```bash
+# Run interactive demo
+./build/mercury
+
+# Run strategy simulation (market making + momentum)
+./build/mercury --strategies
+```
+
+---
+
 ### Running with Concurrency
 
 ```bash

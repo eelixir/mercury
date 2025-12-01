@@ -19,6 +19,7 @@ Mercury is a low-latency trading engine implementing a full limit order book wit
 - **Self-Trade Prevention:** Optional client ID based filtering
 - **Risk Management:** Pre-trade risk checks with position/exposure limits
 - **P&L Tracking:** Realized and unrealized P&L with FIFO cost basis
+- **Trading Strategies:** Market making and momentum strategies with real-time execution
 - **Trade Logging:** CSV output for all executions, risk events, and P&L snapshots
 - **Comprehensive Validation:** Detailed rejection reasons for invalid orders
 - **Concurrency Support:** Thread pool, parallel CSV parsing, async I/O writers
@@ -26,7 +27,15 @@ Mercury is a low-latency trading engine implementing a full limit order book wit
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
+┌────────────────────────────────────────────────────────────────┐
+│                      StrategyManager                            │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌────────────────┐  │
+│  │ MarketMaking    │  │ Momentum        │  │ Custom         │  │
+│  │ (bid-ask quote) │  │ (trend follow)  │  │ Strategies     │  │
+│  └─────────────────┘  └─────────────────┘  └────────────────┘  │
+└────────────────────────────────┬───────────────────────────────┘
+                                 │
+┌────────────────────────────────▼────────────────────────────────┐
 │                        MatchingEngine                           │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
 │  │ Order       │  │ Trade       │  │ Execution               │  │
@@ -103,6 +112,11 @@ mercury/
 │   ├── ConcurrentMatchingEngine.h  # Thread-safe sharded engine
 │   ├── RiskManager.h  # Pre-trade risk checks
 │   ├── PnLTracker.h   # Position and P&L tracking
+│   ├── Strategy.h     # Base strategy framework
+│   ├── MarketMakingStrategy.h  # Bid-ask quoting strategy
+│   ├── MomentumStrategy.h      # Trend-following strategy
+│   ├── StrategyManager.h       # Strategy orchestration
+│   ├── StrategyDemo.h  # Demo scenarios
 │   ├── HashMap.h      # Robin Hood hash map
 │   ├── IntrusiveList.h
 │   ├── ObjectPool.h   # Memory pool allocator
@@ -113,11 +127,14 @@ mercury/
 │   └── TradeWriter.h
 ├── src/               # Implementation files
 ├── tests/             # Google Test suites
+│   ├── strategy_test.cpp     # Strategy unit tests (29 tests)
 │   ├── concurrency_test.cpp  # Thread pool, async writer tests
 │   └── ...
 ├── benchmarks/        # Google Benchmark micro-benchmarks
 ├── data/              # Sample order datasets
 └── docs/              # Additional documentation
+    ├── PROFILING.md   # Performance analysis guide
+    └── STRATEGIES.md  # Strategy development guide
 ```
 
 ## Building & Running
@@ -159,6 +176,9 @@ cmake --build build
 
 # Run interactive demo
 ./build/mercury
+
+# Run strategy simulation demo
+./build/mercury --strategies
 ```
 
 ### Command Line Options
@@ -167,6 +187,7 @@ cmake --build build
 |--------|-------|-------------|
 | `--concurrent` | `-c` | Enable parallel CSV parsing and async post-trade processing |
 | `--async-io` | `-a` | Enable asynchronous file I/O with background writer threads |
+| `--strategies` | `-s` | Run trading strategy simulation demos |
 
 ### Example Output
 
@@ -214,6 +235,95 @@ Total Trades: 53
 Total Volume: 2660 units
 ```
 
+## Trading Strategies
+
+Mercury includes a strategy layer for developing and backtesting trading algorithms.
+
+### Market Making Strategy
+
+Provides liquidity by continuously quoting bid and ask prices:
+
+```cpp
+#include "StrategyManager.h"
+
+MarketMakingConfig config;
+config.name = "MarketMaker";
+config.quoteQuantity = 100;    // Size per quote
+config.minSpread = 2;          // Minimum bid-ask spread
+config.maxSpread = 10;         // Maximum spread
+config.maxInventory = 500;     // Position limit
+config.fadePerUnit = 0.01;     // Spread adjustment per inventory unit
+
+StrategyManager manager(engine);
+manager.addStrategy(std::make_unique<MarketMakingStrategy>(config));
+```
+
+Features:
+- Dynamic spread based on inventory risk
+- Automatic quote refresh on market moves
+- Inventory skew (fade) to manage position
+- Configurable quote sizes and limits
+
+### Momentum Strategy
+
+Trend-following strategy using technical indicators:
+
+```cpp
+MomentumConfig config;
+config.name = "Momentum";
+config.baseQuantity = 50;
+config.shortPeriod = 5;        // Short MA period
+config.longPeriod = 20;        // Long MA period
+config.entryThreshold = 0.02;  // 2% momentum for entry
+config.exitThreshold = 0.005;  // Exit threshold
+config.stopLossPercent = 0.05; // 5% stop loss
+config.takeProfitPercent = 0.10; // 10% take profit
+
+manager.addStrategy(std::make_unique<MomentumStrategy>(config));
+```
+
+Features:
+- SMA/EMA moving averages
+- MACD indicator
+- RSI overbought/oversold detection
+- Stop-loss and take-profit automation
+- Trailing stops
+
+### Running Strategies
+
+```bash
+# Run strategy demo (market making + momentum simulation)
+./build/mercury --strategies
+```
+
+Example output:
+```
+========================================
+   Combined Strategies Demo
+========================================
+Strategies registered: 2
+ - MarketMaking (Client 1)
+ - Momentum (Client 2)
+
+--- Simulating 80 Market Ticks ---
+[MarketMaking] Order 1000000: RESTING Filled=0 Remaining=50 Trades=0
+[Momentum] Order 2000000: FILLED Filled=30 Remaining=0 Trades=2
+...
+
+=== Strategy Manager Summary ===
+--- Momentum ---
+  Orders: 39 submitted, 102 filled
+  Trades: 176, Volume: 5800
+  Position: -30, P&L: 120
+
+--- MarketMaking ---
+  Orders: 125 submitted, 138 filled
+  Trades: 138, Volume: 3965
+  Position: -266, P&L: 4522
+```
+
+See [docs/STRATEGIES.md](docs/STRATEGIES.md) for detailed strategy development guide.
+
 ## Performance
 
 Benchmarks run on 12-core CPU @ 3.6GHz (Release build):
@@ -236,11 +346,12 @@ cmake --build build
 
 ## Testing
 
-200+ unit tests covering:
+230+ unit tests covering:
 - Order book operations (insert, remove, update)
 - Matching engine (limit, market, IOC, FOK)
 - Risk manager (position limits, exposure limits, order limits)
 - P&L tracker (realized P&L, unrealized P&L, FIFO cost basis)
+- Trading strategies (market making, momentum, signal generation)
 - Concurrency (thread pool, async writers, parallel parsing)
 - Edge cases (partial fills, empty book, invalid orders)
 - Stress tests (100K+ orders, deep books)
@@ -269,9 +380,10 @@ cmake --build build
 - [x] Risk manager (position limits, exposure checks)
 - [x] PnL module (realized + unrealized)
 - [x] Multithreading/concurrency (thread pool, async I/O, parallel parsing)
+- [x] Strategy layer (market making, momentum)
 - [ ] Symbol-sharded matching (multi-symbol parallel processing)
-- [ ] Strategy layer (market making, momentum)
 - [ ] Backtesting framework
+- [ ] Strategy performance analytics
 
 ## License
 
