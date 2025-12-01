@@ -428,10 +428,10 @@ Benchmarks run on 12-core CPU @ 3.6GHz (Release build):
 
 | Operation | Latency | Throughput |
 |-----------|---------|------------|
-| Order Insert | 321 ns | 3.1M/sec |
-| Order Match (10 levels) | 1.9 µs | 526K/sec |
-| Order Cancel | 2.7 µs | 370K/sec |
-| Market Sweep (5 levels) | 1.8 µs | 556K/sec |
+| Order Insert | 314 ns | 3.2M/sec |
+| Order Match (10 levels) | 1.1 µs | 1.3M/sec |
+| Order Cancel | 2.9 µs | 427K/sec |
+| Market Sweep (5 levels) | 1.8 µs | 551K/sec |
 | **Sustained Mixed Load** | 312 ns | **3.2M/sec** |
 
 ### Run Benchmarks
