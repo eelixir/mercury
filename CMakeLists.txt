@@ -2,14 +2,17 @@ cmake_minimum_required(VERSION 3.10)
 
 project(Mercury VERSION 1.0 LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 # ============================================================================
 # THREADING SUPPORT
 # ============================================================================
+# THREADING & SSL SUPPORT
+# ============================================================================
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
+find_package(OpenSSL REQUIRED)
 
 # ============================================================================
 # BUILD OPTIONS
@@ -84,8 +87,8 @@ add_executable(mercury
 )
 
 # Include the src and include directories so headers can be found easily
-target_include_directories(mercury PUBLIC src include)
-target_link_libraries(mercury PRIVATE Threads::Threads)
+target_include_directories(mercury PUBLIC src include /home/kunsh/Cpp/Snap /home/kunsh/Cpp/Snap/snap)
+target_link_libraries(mercury PRIVATE Threads::Threads rt OpenSSL::SSL OpenSSL::Crypto)
 
 # Create a library for testable code (excluding main.cpp)
 add_library(mercury_lib
@@ -96,8 +99,8 @@ add_library(mercury_lib
     src/RiskManager.cpp
     src/PnLTracker.cpp
 )
-target_include_directories(mercury_lib PUBLIC include)
-target_link_libraries(mercury_lib PUBLIC Threads::Threads)
+target_include_directories(mercury_lib PUBLIC include /home/kunsh/Cpp/Snap /home/kunsh/Cpp/Snap/snap)
+target_link_libraries(mercury_lib PUBLIC Threads::Threads rt OpenSSL::SSL OpenSSL::Crypto)
 
 # Header-only components (listed for IDE visibility)
 set(MERCURY_HEADERS

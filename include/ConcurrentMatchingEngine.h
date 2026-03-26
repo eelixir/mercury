@@ -7,6 +7,8 @@
 #include <shared_mutex>
 #include <memory>
 #include <atomic>
+#include "snap/snap.hpp"
+#include "snap/includes/shm_link.hpp"
 
 namespace Mercury {
 
@@ -383,7 +385,12 @@ namespace Mercury {
         explicit PostTradeProcessor(size_t numThreads = 0)
             : pool_(numThreads > 0 ? numThreads : 2)
             , tradesProcessed_(0)
-            , executionsProcessed_(0) {}
+            , executionsProcessed_(0) {
+            shmLink_ = snap::connect<Trade>("shm://mercury_trades");
+            if (auto* shm = dynamic_cast<snap::ShmLink<Trade>*>(shmLink_.get())) {
+                shm->set_owner(true);
+            }
+        }
 
         ~PostTradeProcessor() {
             waitAll();
@@ -393,6 +400,9 @@ namespace Mercury {
          * Queue a trade for processing
          */
         void processTrade(const Trade& trade, uint64_t buyClientId, uint64_t sellClientId) {
+            if (shmLink_) {
+                shmLink_->send(trade);
+            }
             if (tradeHandler_) {
                 pool_.submit([this, trade, buyClientId, sellClientId]() {
                     tradeHandler_(trade, buyClientId, sellClientId);
@@ -458,6 +468,7 @@ namespace Mercury {
         ExecutionHandler executionHandler_;
         std::atomic<size_t> tradesProcessed_;
         std::atomic<size_t> executionsProcessed_;
+        std::unique_ptr<snap::ILink<Trade>> shmLink_;
     };
 
 }
