@@ -1,0 +1,165 @@
+# Mercury Agent Guide
+
+This file is the working contract for Codex and other coding agents operating in this repository.
+
+## Goals
+
+- Preserve matching correctness before optimizing for speed.
+- Keep the engine single-book and single-writer unless the task explicitly changes that architecture.
+- Keep backend and frontend contracts aligned when the HTTP or WebSocket surface changes.
+- Keep docs synchronized with the code that actually builds and runs.
+
+## Repository Snapshot
+
+Mercury is now a mixed C++ and TypeScript repository.
+
+Current backend outputs:
+
+- `mercury`: demo, file-processing, replay, and localhost server executable
+- `mercury_lib`: core library used by tests and benchmarks
+- `mercury_tests`: Google Test suite
+- `mercury_benchmarks`: optional Google Benchmark target
+
+Current frontend app:
+
+- `frontend/`: React + Vite + TypeScript dashboard for the live market-data view
+
+Primary code areas:
+
+- `include/`: core headers, market-data DTOs, engine-service, server interfaces
+- `src/`: matching engine, service layer, server runtime, CLI entry point
+- `tests/`: backend correctness and sequencing coverage
+- `frontend/src/`: browser UI, Zustand store, WebSocket handling, order entry
+- `docs/`: architecture and workflow docs
+
+Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/WORKFLOWS.md](docs/WORKFLOWS.md) before making large changes.
+
+## Source Of Truth
+
+When docs, comments, and implementation disagree, trust in this order:
+
+1. `CMakeLists.txt`
+2. `src/` and `include/`
+3. `frontend/src/`
+4. backend and frontend tests
+5. `docs/`
+6. `README.md`
+
+Do not assume an older README claim still matches the build. Verify it in code.
+
+## Architecture Constraints To Preserve
+
+- `MatchingEngine` remains the single-book core.
+- `EngineService` owns live engine mutation on a dedicated engine thread.
+- WebSocket threads do not read the order book directly.
+- Market-data snapshots and deltas are produced on the engine thread after mutation.
+- WebSocket publishing is deferred onto the uWebSockets loop.
+- Symbol support is API-level only in v1. Do not push symbol into core order types unless the task explicitly requires that broader refactor.
+
+## Working Rules For Agents
+
+- Inspect affected headers, implementations, tests, and frontend consumers before editing an API contract.
+- For behavioral changes, update tests in the same pass.
+- Keep changes narrow. Avoid speculative framework work.
+- Do not hand-edit generated directories such as `build/`, `build/_deps/`, `frontend/dist/`, or `frontend/node_modules/`.
+- Treat `src/MatchingEngine.cpp`, `include/OrderBook.h`, `src/EngineService.cpp`, and `src/ServerApp.cpp` as correctness-sensitive.
+- Keep market-data envelopes stable unless the task is explicitly an API-version change.
+- If you change HTTP or WebSocket payloads, update both docs and frontend store handling in the same pass.
+- If you change CLI flags or runtime modes, update `README.md`, `docs/ARCHITECTURE.md`, and `docs/WORKFLOWS.md`.
+
+## Change Priorities
+
+1. Matching correctness and execution semantics
+2. Order-book invariants and data-structure safety
+3. Market-data sequencing and snapshot/delta correctness
+4. Risk and PnL correctness
+5. Concurrency and thread-handoff safety
+6. Frontend state consistency
+7. Benchmark and throughput improvements
+8. Documentation polish
+
+## Code Style Expectations
+
+- Standard: C++17 in backend, TypeScript in frontend
+- Favor clear local logic over clever abstractions
+- Keep hot paths readable and allocation-aware
+- Follow nearby naming and layout conventions
+- Add comments only when intent would otherwise be hard to infer
+- Do not introduce unnecessary framework churn in the frontend
+
+## Build And Test Commands
+
+### Backend Build
+
+```powershell
+cmake -B build -G Ninja
+cmake --build build
+```
+
+### Backend Tests
+
+```powershell
+ctest --test-dir build --output-on-failure
+```
+
+### Frontend Setup And Verification
+
+```powershell
+Set-Location frontend
+npm install
+npm run test:run
+npm run build
+```
+
+### Run The Live Stack
+
+Backend:
+
+```powershell
+.\build\mercury.exe --server --host 127.0.0.1 --port 9001 --symbol SIM
+```
+
+Frontend:
+
+```powershell
+Set-Location frontend
+npm run dev
+```
+
+## Expected Workflow
+
+- Reproduce the issue or identify the affected contract.
+- Read the closest backend and frontend tests first when the live dashboard is involved.
+- Make the smallest coherent change.
+- Run targeted validation for the touched subsystem.
+- Run broader backend and frontend verification if shared interfaces changed.
+- Update docs in the same pass when runtime behavior, API shape, or developer commands changed.
+
+See [docs/WORKFLOWS.md](docs/WORKFLOWS.md) for concrete checklists.
+
+## High-Risk Areas
+
+- `include/OrderBook.h`: resting-order ownership, lookup consistency, price-level maintenance
+- `src/MatchingEngine.cpp`: matching semantics, TIF behavior, callbacks, modify/cancel logic
+- `src/EngineService.cpp`: engine-thread serialization, sequencing, replay, stats and PnL publication
+- `src/ServerApp.cpp`: request parsing, JSON contract, WebSocket lifecycle, publish handoff
+- `frontend/src/store/market-data-store.ts`: sequence handling and state application
+- `frontend/src/hooks/use-market-data-websocket.ts`: reconnect and resync behavior
+
+## Documentation Maintenance Rule
+
+Any agent changing one of the following must update the relevant docs in the same pass:
+
+- build targets or build options
+- public CLI commands
+- HTTP or WebSocket payloads
+- major subsystem responsibilities
+- frontend/backend runtime workflow
+- documented matching behavior
+
+At minimum, keep these files in sync:
+
+- `AGENTS.md`
+- `docs/ARCHITECTURE.md`
+- `docs/WORKFLOWS.md`
+- `README.md` when user-facing behavior changes

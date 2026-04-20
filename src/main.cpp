@@ -10,6 +10,7 @@
 #include "TradeWriter.h"
 #include "RiskManager.h"
 #include "PnLTracker.h"
+#include "ServerApp.h"
 #include "ThreadPool.h"
 #include "AsyncWriter.h"
 #include "StrategyDemo.h"
@@ -169,6 +170,34 @@ int main(int argc, char* argv[]) {
     std::cout << "Initializing Mercury Trading Engine...\n";
     std::cout << "Hardware concurrency: " << std::thread::hardware_concurrency() << " threads\n";
 
+    Mercury::ServerOptions serverOptions;
+    bool runServerModeFlag = false;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--server") {
+            runServerModeFlag = true;
+        } else if (arg == "--replay" && i + 1 < argc) {
+            serverOptions.replayFile = argv[++i];
+        } else if (arg == "--replay-speed" && i + 1 < argc) {
+            serverOptions.replaySpeed = std::stod(argv[++i]);
+        } else if (arg == "--replay-loop") {
+            serverOptions.replayLoop = true;
+        } else if (arg == "--replay-loop-pause" && i + 1 < argc) {
+            serverOptions.replayLoopPauseMs = static_cast<uint64_t>(std::stoull(argv[++i]));
+        } else if (arg == "--port" && i + 1 < argc) {
+            serverOptions.port = std::stoi(argv[++i]);
+        } else if (arg == "--host" && i + 1 < argc) {
+            serverOptions.host = argv[++i];
+        } else if (arg == "--symbol" && i + 1 < argc) {
+            serverOptions.symbol = argv[++i];
+        }
+    }
+
+    if (runServerModeFlag) {
+        return Mercury::runServer(serverOptions);
+    }
+
     // Create the matching engine
     Mercury::MatchingEngine engine;
 
@@ -192,6 +221,14 @@ int main(int argc, char* argv[]) {
                 runStrategies = true;
             } else if (arg == "--backtest" || arg == "-b") {
                 runBacktest = true;
+            } else if (arg == "--server" || arg == "--replay" || arg == "--replay-speed" ||
+                       arg == "--replay-loop" || arg == "--replay-loop-pause" ||
+                       arg == "--port" || arg == "--host" || arg == "--symbol") {
+                if ((arg == "--replay" || arg == "--replay-speed" ||
+                     arg == "--replay-loop-pause" || arg == "--port" ||
+                     arg == "--host" || arg == "--symbol") && i + 1 < argc) {
+                    ++i;
+                }
             } else if (arg[0] != '-') {
                 positionalArgs.push_back(arg);
             }
@@ -607,6 +644,14 @@ int main(int argc, char* argv[]) {
         std::cout << "Options:\n";
         std::cout << "  --concurrent, -c   Enable concurrent parsing and post-trade processing\n";
         std::cout << "  --async-io, -a     Enable asynchronous I/O writers\n";
+        std::cout << "  --server           Run the localhost HTTP/WebSocket server\n";
+        std::cout << "  --replay <file>    Feed a replay CSV into server mode\n";
+        std::cout << "  --replay-speed <x> Replay speed multiplier for server mode\n";
+        std::cout << "  --replay-loop      Loop the replay file continuously\n";
+        std::cout << "  --replay-loop-pause <ms>  Pause between replay loops (default 1000)\n";
+        std::cout << "  --port <port>      Server port (default: 9001)\n";
+        std::cout << "  --host <host>      Server host (default: 127.0.0.1)\n";
+        std::cout << "  --symbol <name>    API-level symbol label for server mode\n";
         std::cout << "  --strategies, -s   Run trading strategy demos\n";
         std::cout << "  --backtest, -b     Run backtesting demos\n\n";
         std::cout << "Backtest modes (use with --backtest):\n";

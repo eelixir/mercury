@@ -1,6 +1,7 @@
 #include "MatchingEngine.h"
 #include "PriceLevel.h"
 #include <algorithm>
+#include <chrono>
 #include <iostream>
 #include <limits>
 
@@ -102,6 +103,7 @@ namespace Mercury {
         // If order still has remaining quantity, add to book (GTC behavior)
         if (order.quantity > 0) {
             orderBook_.addOrder(order);
+            notifyBookMutation(order.side, order.price, BookDeltaAction::Upsert);
             
             if (result.hasFills()) {
                 result.status = ExecutionStatus::PartialFill;
@@ -194,8 +196,12 @@ namespace Mercury {
             return ExecutionResult::makeRejection(orderId, RejectReason::OrderNotFound);
         }
 
+        Side side = existingOrder->side;
+        int64_t price = existingOrder->price;
+
         // Remove the order
         orderBook_.removeOrder(orderId);
+        notifyBookMutation(side, price, BookDeltaAction::Remove);
 
         result.status = ExecutionStatus::Cancelled;
         result.remainingQuantity = existingOrder->quantity;
@@ -234,6 +240,8 @@ namespace Mercury {
         }
 
         Order modifiedOrder = existingOrder.value();
+        Side originalSide = modifiedOrder.side;
+        int64_t originalPrice = modifiedOrder.price;
 
         // Check if there are actual changes
         bool hasChanges = false;
@@ -255,6 +263,7 @@ namespace Mercury {
 
         // Remove the original order
         orderBook_.removeOrder(orderId);
+        notifyBookMutation(originalSide, originalPrice, BookDeltaAction::Remove);
 
         // Re-submit with new timestamp (loses time priority)
         modifiedOrder.timestamp = getTimestamp();
@@ -282,6 +291,7 @@ namespace Mercury {
         } else {
             // Just add to book
             orderBook_.addOrder(modifiedOrder);
+            notifyBookMutation(modifiedOrder.side, modifiedOrder.price, BookDeltaAction::Upsert);
             result.status = ExecutionStatus::Modified;
             result.remainingQuantity = modifiedOrder.quantity;
             result.message = "Order modified successfully";
@@ -401,9 +411,13 @@ namespace Mercury {
             if (order.side == Side::Buy) {
                 trade.buyOrderId = order.id;
                 trade.sellOrderId = restingOrder.id;
+                trade.buyClientId = order.clientId;
+                trade.sellClientId = restingOrder.clientId;
             } else {
                 trade.buyOrderId = restingOrder.id;
                 trade.sellOrderId = order.id;
+                trade.buyClientId = restingOrder.clientId;
+                trade.sellClientId = order.clientId;
             }
 
             trades.push_back(trade);
@@ -423,10 +437,12 @@ namespace Mercury {
             if (fillQty == restingOrder.quantity) {
                 // Fully filled - remove from book
                 orderBook_.removeOrder(restingOrder.id);
+                notifyBookMutation(restingOrder.side, priceLevel, BookDeltaAction::Remove);
             } else {
                 // Partially filled - update quantity
                 orderBook_.updateOrderQuantity(restingOrder.id, 
                     restingOrder.quantity - fillQty);
+                notifyBookMutation(restingOrder.side, priceLevel, BookDeltaAction::Upsert);
             }
         }
 
@@ -511,6 +527,27 @@ namespace Mercury {
         if (executionCallback_) {
             executionCallback_(result);
         }
+    }
+
+    void MatchingEngine::notifyBookMutation(Side side, int64_t price, BookDeltaAction action) {
+        if (!bookMutationCallback_) {
+            return;
+        }
+
+        BookMutation mutation;
+        mutation.side = side;
+        mutation.price = price;
+        mutation.quantity = orderBook_.getQuantityAtPrice(price, side);
+        mutation.orderCount = orderBook_.getOrderCountAtPrice(price, side);
+        mutation.action = (mutation.quantity == 0 || mutation.orderCount == 0)
+            ? BookDeltaAction::Remove
+            : action;
+
+        auto now = std::chrono::time_point_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now());
+        mutation.timestamp = static_cast<uint64_t>(now.time_since_epoch().count());
+
+        bookMutationCallback_(mutation);
     }
 
 }

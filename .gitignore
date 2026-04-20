@@ -49,3 +49,5 @@ build/
 # GoogleTest (fetched by CMake)
 googletest/
 
+# Logs
+*.log

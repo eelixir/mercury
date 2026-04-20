@@ -18,6 +18,7 @@
 #pragma once
 
 #include "Order.h"
+#include "MarketData.h"
 #include "OrderNode.h"
 #include "PriceLevel.h"
 #include "HashMap.h"
@@ -330,6 +331,43 @@ namespace Mercury {
                 auto it = asks_.find(price);
                 return (it != asks_.end()) ? it->second.quantity() : 0;
             }
+        }
+
+        [[nodiscard]] size_t getOrderCountAtPrice(int64_t price, Side side) const {
+            if (side == Side::Buy) {
+                auto it = bids_.find(price);
+                return (it != bids_.end()) ? it->second.size() : 0;
+            } else {
+                auto it = asks_.find(price);
+                return (it != asks_.end()) ? it->second.size() : 0;
+            }
+        }
+
+        std::vector<BookLevel> getTopLevels(Side side, size_t depth) const {
+            std::vector<BookLevel> levels;
+            levels.reserve(depth);
+
+            if (depth == 0) {
+                return levels;
+            }
+
+            if (side == Side::Buy) {
+                for (const auto& [price, level] : bids_) {
+                    levels.push_back(BookLevel{price, level.quantity(), level.size(), Side::Buy});
+                    if (levels.size() >= depth) {
+                        break;
+                    }
+                }
+            } else {
+                for (const auto& [price, level] : asks_) {
+                    levels.push_back(BookLevel{price, level.quantity(), level.size(), Side::Sell});
+                    if (levels.size() >= depth) {
+                        break;
+                    }
+                }
+            }
+
+            return levels;
         }
 
         [[nodiscard]] size_t getOrderCount() const noexcept { return orderLookup_.size(); }

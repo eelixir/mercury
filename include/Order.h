@@ -153,6 +153,8 @@ namespace Mercury {
         uint64_t tradeId = 0;
         uint64_t buyOrderId = 0;
         uint64_t sellOrderId = 0;
+        uint64_t buyClientId = 0;
+        uint64_t sellClientId = 0;
         int64_t price = 0;
         uint64_t quantity = 0;
         uint64_t timestamp = 0;

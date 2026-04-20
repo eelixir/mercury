@@ -2,6 +2,7 @@
 
 #include "Order.h"
 #include "OrderBook.h"
+#include "MarketData.h"
 #include <functional>
 #include <atomic>
 
@@ -26,6 +27,7 @@ namespace Mercury {
         // Callback types for trade notifications
         using TradeCallback = std::function<void(const Trade&)>;
         using ExecutionCallback = std::function<void(const ExecutionResult&)>;
+        using BookMutationCallback = std::function<void(const BookMutation&)>;
 
         MatchingEngine();
 
@@ -75,6 +77,7 @@ namespace Mercury {
         // Register callbacks for trade notifications
         void setTradeCallback(TradeCallback callback) { tradeCallback_ = std::move(callback); }
         void setExecutionCallback(ExecutionCallback callback) { executionCallback_ = std::move(callback); }
+        void setBookMutationCallback(BookMutationCallback callback) { bookMutationCallback_ = std::move(callback); }
 
         // Accessors
         const OrderBook& getOrderBook() const { return orderBook_; }
@@ -97,6 +100,7 @@ namespace Mercury {
         // Callbacks
         TradeCallback tradeCallback_;
         ExecutionCallback executionCallback_;
+        BookMutationCallback bookMutationCallback_;
 
         /**
          * Match an aggressive order against the book
@@ -134,6 +138,11 @@ namespace Mercury {
          * Notify callbacks about an execution result
          */
         void notifyExecution(const ExecutionResult& result);
+
+        /**
+         * Notify listeners about an aggregated price-level change
+         */
+        void notifyBookMutation(Side side, int64_t price, BookDeltaAction action);
 
         /**
          * Check if an order can be completely filled (for FOK orders)
