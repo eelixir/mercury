@@ -1,5 +1,3 @@
-# Mercury
-
 # <img src="https://github.com/user-attachments/assets/7ee41ddf-cf24-42fb-953b-d44c55e9f352" width="400">
 
 > High-performance C++ matching engine and live trading dashboard built from scratch with custom data structures, real-time WebSocket streaming, and nanosecond latency instrumentation.
