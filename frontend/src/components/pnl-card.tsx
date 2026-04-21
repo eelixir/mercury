@@ -1,5 +1,5 @@
 import { formatSigned } from '../lib/format'
-import { useMarketDataStore } from '../store/market-data-store'
+import { useActiveBucket, useMarketDataStore } from '../store/market-data-store'
 import { Card, CardBody, CardHeader } from './ui/card'
 
 function signClass(value: number | undefined | null) {
@@ -24,7 +24,7 @@ function Row({ label, value, valueClass }: { label: string; value: string; value
 
 export function PnLCard() {
   const activeClientId = useMarketDataStore((state) => state.activeClientId)
-  const pnl = useMarketDataStore((state) => state.pnlByClient[state.activeClientId])
+  const pnl = useActiveBucket().pnlByClient[activeClientId]
 
   const net = pnl?.netPosition ?? 0
   const total = pnl?.totalPnL ?? 0

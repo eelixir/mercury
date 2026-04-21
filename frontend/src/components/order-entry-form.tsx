@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { OrderResponse, OrderType, Side } from '../lib/types'
-import { useMarketDataStore } from '../store/market-data-store'
+import { useActiveSymbol, useMarketDataStore } from '../store/market-data-store'
 import { Button } from './ui/button'
 import { Card, CardBody, CardHeader } from './ui/card'
 import { Input } from './ui/input'
@@ -98,6 +98,7 @@ export function OrderEntryForm() {
   const setActiveClientId = useMarketDataStore((state) => state.setActiveClientId)
   const trackOrderId = useMarketDataStore((state) => state.trackOrderId)
   const lastResponse = useMarketDataStore((state) => state.lastOrderResponse)
+  const activeSymbol = useActiveSymbol()
 
   const [orderType, setOrderType] = useState<OrderType>('limit')
   const [side, setSide] = useState<Side>('buy')
@@ -146,6 +147,7 @@ export function OrderEntryForm() {
                 side,
                 clientId: Number.isFinite(nextClientId) ? nextClientId : 1,
                 tif: 'GTC',
+                symbol: activeSymbol,
               }
               if (needsPrice) request.price = toNum(price)
               if (needsQuantity) request.quantity = toNum(quantity)

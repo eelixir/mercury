@@ -18,27 +18,62 @@ export interface ChartPoint {
   value: number
 }
 
-interface MarketDataState {
-  symbol: string
+export interface SymbolBucket {
   sequence: number
-  connectionState: ConnectionState
   bids: BookLevel[]
   asks: BookLevel[]
   trades: TradePayload[]
   stats: StatsPayload | null
   simulation: SimulationStatePayload | null
-  pnlByClient: Record<number, PnLPayload>
   chartPoints: ChartPoint[]
+  pnlByClient: Record<number, PnLPayload>
+  engineLatencyNs: number | null
+  messagesPerSecond: number
+}
+
+export const EMPTY_BUCKET: SymbolBucket = {
+  sequence: 0,
+  bids: [],
+  asks: [],
+  trades: [],
+  stats: null,
+  simulation: null,
+  chartPoints: [],
+  pnlByClient: {},
+  engineLatencyNs: null,
+  messagesPerSecond: 0,
+}
+
+function newBucket(): SymbolBucket {
+  return {
+    sequence: 0,
+    bids: [],
+    asks: [],
+    trades: [],
+    stats: null,
+    simulation: null,
+    chartPoints: [],
+    pnlByClient: {},
+    engineLatencyNs: null,
+    messagesPerSecond: 0,
+  }
+}
+
+interface MarketDataState {
+  activeSymbol: string
+  symbols: string[]
+  bySymbol: Record<string, SymbolBucket>
+  connectionState: ConnectionState
   activeClientId: number
   lastOrderResponse: OrderResponse | null
   submittedOrderIds: Set<number>
-  engineLatencyNs: number | null
-  messagesPerSecond: number
+  setActiveSymbol: (symbol: string) => void
   setConnectionState: (state: ConnectionState) => void
   setActiveClientId: (clientId: number) => void
   setLastOrderResponse: (response: OrderResponse | null) => void
   trackOrderId: (orderId: number) => void
   applyEnvelope: (envelope: MarketEnvelope) => boolean
+  reset: () => void
 }
 
 function upsertLevel(levels: BookLevel[], nextLevel: BookLevel, descending: boolean) {
@@ -51,22 +86,45 @@ function upsertLevel(levels: BookLevel[], nextLevel: BookLevel, descending: bool
   return filtered
 }
 
+function ensureSymbol(
+  symbols: string[],
+  bySymbol: Record<string, SymbolBucket>,
+  symbol: string,
+): { symbols: string[]; bySymbol: Record<string, SymbolBucket> } {
+  const nextSymbols = symbols.includes(symbol) ? symbols : [...symbols, symbol].sort()
+  const nextBySymbol = bySymbol[symbol] ? bySymbol : { ...bySymbol, [symbol]: newBucket() }
+  return { symbols: nextSymbols, bySymbol: nextBySymbol }
+}
+
+function updateBucket(
+  bySymbol: Record<string, SymbolBucket>,
+  symbol: string,
+  patch: Partial<SymbolBucket>,
+): Record<string, SymbolBucket> {
+  const current = bySymbol[symbol] ?? newBucket()
+  return { ...bySymbol, [symbol]: { ...current, ...patch } }
+}
+
 export const useMarketDataStore = create<MarketDataState>((set, get) => ({
-  symbol: 'SIM',
-  sequence: 0,
+  activeSymbol: 'SIM',
+  symbols: ['SIM'],
+  bySymbol: { SIM: newBucket() },
   connectionState: 'connecting',
-  bids: [],
-  asks: [],
-  trades: [],
-  stats: null,
-  simulation: null,
-  pnlByClient: {},
-  chartPoints: [],
   activeClientId: 1,
   lastOrderResponse: null,
   submittedOrderIds: new Set<number>(),
-  engineLatencyNs: null,
-  messagesPerSecond: 0,
+  setActiveSymbol: (activeSymbol) =>
+    set((state) => {
+      if (!activeSymbol || activeSymbol === state.activeSymbol) {
+        return {} as Partial<MarketDataState>
+      }
+      const ensured = ensureSymbol(state.symbols, state.bySymbol, activeSymbol)
+      return {
+        activeSymbol,
+        symbols: ensured.symbols,
+        bySymbol: ensured.bySymbol,
+      }
+    }),
   setConnectionState: (connectionState) => set({ connectionState }),
   setActiveClientId: (activeClientId) => set({ activeClientId }),
   setLastOrderResponse: (lastOrderResponse) => set({ lastOrderResponse }),
@@ -78,22 +136,47 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
       return { submittedOrderIds: next }
     })
   },
+  reset: () =>
+    set({
+      activeSymbol: 'SIM',
+      symbols: ['SIM'],
+      bySymbol: { SIM: newBucket() },
+      connectionState: 'connecting',
+      activeClientId: 1,
+      lastOrderResponse: null,
+      submittedOrderIds: new Set<number>(),
+    }),
   applyEnvelope: (envelope) => {
-    const currentSequence = get().sequence
+    const symbol = envelope.symbol
+    if (!symbol) return false
 
-    if (envelope.symbol && envelope.symbol !== get().symbol) {
-      return false
-    }
+    const state = get()
+    const existingBucket = state.bySymbol[symbol] ?? newBucket()
+    const currentSequence = existingBucket.sequence
 
-    if (envelope.type !== 'snapshot' && envelope.type !== 'sim_state' && currentSequence !== 0 && envelope.sequence > currentSequence + 1) {
+    const isGap =
+      envelope.type !== 'snapshot' &&
+      envelope.type !== 'sim_state' &&
+      currentSequence !== 0 &&
+      envelope.sequence > currentSequence + 1
+
+    if (isGap) {
       return true
     }
 
-    set((state) => {
+    set((prev) => {
+      const ensured = ensureSymbol(prev.symbols, prev.bySymbol, symbol)
+      const bucket = ensured.bySymbol[symbol]
+
+      let activePatch: Partial<MarketDataState> | null = null
+      if (prev.activeSymbol === '' || !prev.symbols.includes(prev.activeSymbol)) {
+        activePatch = { activeSymbol: symbol }
+      }
+
       if (envelope.type === 'snapshot') {
         const nextStats: StatsPayload = {
-          tradeCount: state.stats?.tradeCount ?? 0,
-          totalVolume: state.stats?.totalVolume ?? 0,
+          tradeCount: bucket.stats?.tradeCount ?? 0,
+          totalVolume: bucket.stats?.totalVolume ?? 0,
           orderCount: envelope.payload.bids.length + envelope.payload.asks.length,
           bidLevels: envelope.payload.bids.length,
           askLevels: envelope.payload.asks.length,
@@ -107,18 +190,21 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
         const nextChartPoints =
           envelope.payload.midPrice > 0
             ? [
-                ...state.chartPoints,
+                ...bucket.chartPoints,
                 { timestamp: envelope.payload.timestamp, value: envelope.payload.midPrice },
               ].slice(-MAX_POINTS)
-            : state.chartPoints
+            : bucket.chartPoints
 
         return {
-          symbol: envelope.symbol,
-          sequence: envelope.sequence,
-          bids: envelope.payload.bids,
-          asks: envelope.payload.asks,
-          stats: nextStats,
-          chartPoints: nextChartPoints,
+          symbols: ensured.symbols,
+          bySymbol: updateBucket(ensured.bySymbol, symbol, {
+            sequence: envelope.sequence,
+            bids: envelope.payload.bids,
+            asks: envelope.payload.asks,
+            stats: nextStats,
+            chartPoints: nextChartPoints,
+          }),
+          ...(activePatch ?? {}),
         }
       }
 
@@ -136,17 +222,20 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
             : {}
 
         return {
-          symbol: envelope.symbol,
-          sequence: envelope.sequence,
-          bids:
-            envelope.payload.side === 'buy'
-              ? upsertLevel(state.bids, nextLevel, true)
-              : state.bids,
-          asks:
-            envelope.payload.side === 'sell'
-              ? upsertLevel(state.asks, nextLevel, false)
-              : state.asks,
-          ...latencyUpdate,
+          symbols: ensured.symbols,
+          bySymbol: updateBucket(ensured.bySymbol, symbol, {
+            sequence: envelope.sequence,
+            bids:
+              envelope.payload.side === 'buy'
+                ? upsertLevel(bucket.bids, nextLevel, true)
+                : bucket.bids,
+            asks:
+              envelope.payload.side === 'sell'
+                ? upsertLevel(bucket.asks, nextLevel, false)
+                : bucket.asks,
+            ...latencyUpdate,
+          }),
+          ...(activePatch ?? {}),
         }
       }
 
@@ -157,57 +246,88 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
             : {}
 
         return {
-          symbol: envelope.symbol,
-          sequence: envelope.sequence,
-          trades: [envelope.payload, ...state.trades].slice(0, MAX_TRADES),
-          ...latencyUpdate,
+          symbols: ensured.symbols,
+          bySymbol: updateBucket(ensured.bySymbol, symbol, {
+            sequence: envelope.sequence,
+            trades: [envelope.payload, ...bucket.trades].slice(0, MAX_TRADES),
+            ...latencyUpdate,
+          }),
+          ...(activePatch ?? {}),
         }
       }
 
       if (envelope.type === 'stats') {
         const nextPoints =
           envelope.payload.midPrice > 0
-            ? [...state.chartPoints, { timestamp: envelope.payload.timestamp, value: envelope.payload.midPrice }].slice(
-                -MAX_POINTS,
-              )
-            : state.chartPoints
+            ? [
+                ...bucket.chartPoints,
+                { timestamp: envelope.payload.timestamp, value: envelope.payload.midPrice },
+              ].slice(-MAX_POINTS)
+            : bucket.chartPoints
 
         return {
-          symbol: envelope.symbol,
-          sequence: envelope.sequence,
-          stats: envelope.payload,
-          chartPoints: nextPoints,
-          messagesPerSecond: envelope.payload.messagesPerSecond ?? state.messagesPerSecond,
+          symbols: ensured.symbols,
+          bySymbol: updateBucket(ensured.bySymbol, symbol, {
+            sequence: envelope.sequence,
+            stats: envelope.payload,
+            chartPoints: nextPoints,
+            messagesPerSecond: envelope.payload.messagesPerSecond ?? bucket.messagesPerSecond,
+          }),
+          ...(activePatch ?? {}),
         }
       }
 
       if (envelope.type === 'sim_state') {
         return {
-          symbol: envelope.symbol,
-          sequence: Math.max(state.sequence, envelope.sequence),
-          simulation: envelope.payload,
+          symbols: ensured.symbols,
+          bySymbol: updateBucket(ensured.bySymbol, symbol, {
+            sequence: Math.max(bucket.sequence, envelope.sequence),
+            simulation: envelope.payload,
+          }),
+          ...(activePatch ?? {}),
         }
       }
 
       if (envelope.type === 'execution') {
         return {
-          symbol: envelope.symbol,
-          sequence: envelope.sequence,
+          symbols: ensured.symbols,
+          bySymbol: updateBucket(ensured.bySymbol, symbol, {
+            sequence: envelope.sequence,
+          }),
+          ...(activePatch ?? {}),
         }
       }
 
-      const pnlByClient = {
-        ...state.pnlByClient,
+      // pnl
+      const nextPnl = {
+        ...bucket.pnlByClient,
         [envelope.payload.clientId]: envelope.payload,
       }
 
       return {
-        symbol: envelope.symbol,
-        sequence: envelope.sequence,
-        pnlByClient,
+        symbols: ensured.symbols,
+        bySymbol: updateBucket(ensured.bySymbol, symbol, {
+          sequence: envelope.sequence,
+          pnlByClient: nextPnl,
+        }),
+        ...(activePatch ?? {}),
       }
     })
 
     return false
   },
 }))
+
+// Convenience selectors ------------------------------------------------
+
+export function useActiveBucket(): SymbolBucket {
+  return useMarketDataStore((state) => state.bySymbol[state.activeSymbol] ?? EMPTY_BUCKET)
+}
+
+export function useActiveSymbol(): string {
+  return useMarketDataStore((state) => state.activeSymbol)
+}
+
+export function useAvailableSymbols(): string[] {
+  return useMarketDataStore((state) => state.symbols)
+}

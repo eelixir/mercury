@@ -1,6 +1,6 @@
 import { useDeferredValue, useMemo } from 'react'
 import { formatPrice } from '../lib/format'
-import { useMarketDataStore } from '../store/market-data-store'
+import { useActiveBucket } from '../store/market-data-store'
 import { Card, CardBody, CardHeader } from './ui/card'
 
 function Row({
@@ -54,9 +54,10 @@ function Header() {
 }
 
 export function OrderBookLadder() {
-  const asks = useDeferredValue(useMarketDataStore((state) => state.asks))
-  const bids = useDeferredValue(useMarketDataStore((state) => state.bids))
-  const stats = useMarketDataStore((state) => state.stats)
+  const bucket = useActiveBucket()
+  const asks = useDeferredValue(bucket.asks)
+  const bids = useDeferredValue(bucket.bids)
+  const stats = bucket.stats
 
   const maxQuantity = useMemo(() => {
     let max = 0

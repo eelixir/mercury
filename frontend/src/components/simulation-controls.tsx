@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useMarketDataStore } from '../store/market-data-store'
+import { useActiveBucket } from '../store/market-data-store'
 import { Button } from './ui/button'
 import { Card, CardBody, CardHeader } from './ui/card'
 
@@ -17,7 +17,7 @@ async function postControl(action: string, volatility?: string) {
 }
 
 export function SimulationControls() {
-  const simulation = useMarketDataStore((state) => state.simulation)
+  const simulation = useActiveBucket().simulation
   const [busy, setBusy] = useState(false)
 
   const disabled = !simulation?.enabled || busy

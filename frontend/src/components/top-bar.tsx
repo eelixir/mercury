@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react'
 import { Badge } from './ui/badge'
 import { formatPrice } from '../lib/format'
-import { useMarketDataStore } from '../store/market-data-store'
+import {
+  useActiveBucket,
+  useActiveSymbol,
+  useAvailableSymbols,
+  useMarketDataStore,
+} from '../store/market-data-store'
 
 function useClock() {
   const [now, setNow] = useState(() => new Date())
@@ -16,11 +21,40 @@ function formatClock(date: Date) {
   return date.toLocaleTimeString([], { hour12: false })
 }
 
+function SymbolSelector() {
+  const symbols = useAvailableSymbols()
+  const activeSymbol = useActiveSymbol()
+  const setActiveSymbol = useMarketDataStore((state) => state.setActiveSymbol)
+
+  if (symbols.length <= 1) {
+    return (
+      <span className="text-[12px] font-semibold text-[color:var(--color-text-primary)]">
+        {activeSymbol || '—'}
+      </span>
+    )
+  }
+
+  return (
+    <select
+      value={activeSymbol}
+      onChange={(event) => setActiveSymbol(event.target.value)}
+      className="h-6 rounded-sm border border-[color:var(--color-border-subtle)] bg-[color:var(--color-bg-panel-alt)] px-1.5 text-[12px] font-semibold text-[color:var(--color-text-primary)] outline-none focus:border-[color:var(--color-accent)]"
+      aria-label="Active symbol"
+    >
+      {symbols.map((symbol) => (
+        <option key={symbol} value={symbol}>
+          {symbol}
+        </option>
+      ))}
+    </select>
+  )
+}
+
 export function TopBar() {
-  const symbol = useMarketDataStore((state) => state.symbol)
   const connection = useMarketDataStore((state) => state.connectionState)
-  const stats = useMarketDataStore((state) => state.stats)
-  const simulation = useMarketDataStore((state) => state.simulation)
+  const bucket = useActiveBucket()
+  const stats = bucket.stats
+  const simulation = bucket.simulation
   const now = useClock()
 
   const mid = stats?.midPrice ?? null
@@ -46,7 +80,7 @@ export function TopBar() {
         <div className="h-4 w-px bg-[color:var(--color-border-subtle)]" />
 
         <div className="flex items-center gap-3">
-          <span className="text-[12px] font-semibold text-[color:var(--color-text-primary)]">{symbol}</span>
+          <SymbolSelector />
           <span className="num text-[12px] text-[color:var(--color-text-primary)]">
             {formatPrice(mid)}
           </span>

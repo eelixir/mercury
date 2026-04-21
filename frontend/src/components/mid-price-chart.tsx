@@ -2,14 +2,15 @@ import { createChart, LineSeries, type IChartApi, type ISeriesApi } from 'lightw
 import { useEffect, useMemo, useRef } from 'react'
 import { Card, CardBody, CardHeader } from './ui/card'
 import { formatPrice } from '../lib/format'
-import { useMarketDataStore } from '../store/market-data-store'
+import { useActiveBucket } from '../store/market-data-store'
 
 export function MidPriceChart() {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Line'> | null>(null)
-  const chartPoints = useMarketDataStore((state) => state.chartPoints)
-  const stats = useMarketDataStore((state) => state.stats)
+  const bucket = useActiveBucket()
+  const chartPoints = bucket.chartPoints
+  const stats = bucket.stats
 
   const deferredPoints = useMemo(() => {
     // lightweight-charts requires strictly ascending `time`. Our chartPoints

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { formatPrice } from '../lib/format'
-import { useMarketDataStore } from '../store/market-data-store'
+import { useActiveBucket } from '../store/market-data-store'
 
 function Tile({
   label,
@@ -31,7 +31,7 @@ function Tile({
 }
 
 export function StatsStrip() {
-  const stats = useMarketDataStore((state) => state.stats)
+  const stats = useActiveBucket().stats
 
   const bid = stats?.bestBid ?? null
   const ask = stats?.bestAsk ?? null

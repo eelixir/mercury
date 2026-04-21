@@ -1,11 +1,11 @@
 import { useDeferredValue, useMemo } from 'react'
 import { formatClock, formatPrice } from '../lib/format'
-import { useMarketDataStore } from '../store/market-data-store'
+import { useActiveBucket, useMarketDataStore } from '../store/market-data-store'
 import { Badge } from './ui/badge'
 import { Card, CardBody, CardHeader } from './ui/card'
 
 export function TradeTape() {
-  const trades = useDeferredValue(useMarketDataStore((state) => state.trades))
+  const trades = useDeferredValue(useActiveBucket().trades)
   const submittedOrderIds = useMarketDataStore((state) => state.submittedOrderIds)
 
   const decoratedTrades = useMemo(() => {

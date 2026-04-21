@@ -1,4 +1,4 @@
-import { useMarketDataStore } from '../store/market-data-store'
+import { useActiveBucket, useMarketDataStore } from '../store/market-data-store'
 import { Card, CardBody, CardHeader } from './ui/card'
 
 function latencyColor(ns: number | null): string {
@@ -38,8 +38,9 @@ function Metric({
 }
 
 export function SystemHealth() {
-  const latencyNs = useMarketDataStore((state) => state.engineLatencyNs)
-  const mps = useMarketDataStore((state) => state.messagesPerSecond)
+  const bucket = useActiveBucket()
+  const latencyNs = bucket.engineLatencyNs
+  const mps = bucket.messagesPerSecond
   const connection = useMarketDataStore((state) => state.connectionState)
 
   const latencyClass = latencyColor(latencyNs)

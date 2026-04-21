@@ -1,10 +1,11 @@
-import { useMarketDataStore } from '../store/market-data-store'
+import { useActiveBucket, useMarketDataStore } from '../store/market-data-store'
 
 export function StatusBar() {
-  const stats = useMarketDataStore((state) => state.stats)
+  const bucket = useActiveBucket()
+  const stats = bucket.stats
+  const simulation = bucket.simulation
   const connection = useMarketDataStore((state) => state.connectionState)
   const activeClientId = useMarketDataStore((state) => state.activeClientId)
-  const simulation = useMarketDataStore((state) => state.simulation)
 
   return (
     <footer className="flex items-center justify-between gap-4 border-t border-[color:var(--color-border-subtle)] bg-[color:var(--color-bg-panel)] px-3 py-1 text-[10.5px] uppercase tracking-wider text-[color:var(--color-text-muted)]">
