@@ -16,6 +16,8 @@ describe('market data store', () => {
       activeClientId: 1,
       lastOrderResponse: null,
       submittedOrderIds: new Set<number>(),
+      engineLatencyNs: null,
+      messagesPerSecond: 0,
     })
   })
 

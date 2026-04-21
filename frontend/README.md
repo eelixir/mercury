@@ -1,73 +1,95 @@
-# React + TypeScript + Vite
+# Mercury Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React + TypeScript + Vite dashboard for the Mercury matching engine.
 
-Currently, two official plugins are available:
+## Stack
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **React 19** with TypeScript
+- **Vite 8** dev server with HMR
+- **Zustand** for state management
+- **Tailwind CSS 4** via `@tailwindcss/vite`
+- **Lightweight Charts** for the mid-price chart
+- **shadcn/ui-style** local primitives in `src/components/ui/`
 
-## React Compiler
+## Getting Started
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```powershell
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Vite proxies `/api` and `/ws` to `127.0.0.1:9001` (configured in `vite.config.ts`). The backend server must be running before the dashboard can connect.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Dashboard Layout
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+| Area | Component | Description |
+|------|-----------|-------------|
+| Top | `TopBar` | Symbol, mid-price, spread, connection badge, clock |
+| Top | `StatsStrip` | Bid, ask, mid, spread, bps, trades, volume, orders, levels |
+| Left | `OrderEntryForm` | Limit/market/cancel/modify with buy/sell, price, qty, clientId |
+| Left | `PnLCard` | Net position, total/realized/unrealized PnL (green/red) |
+| Left | `SystemHealth` | Engine latency (µs), throughput (msg/s), connection dot |
+| Center | `MidPriceChart` | Lightweight-charts line chart with delta % tracking |
+| Center | `OrderBookLadder` | L2 depth — asks (red) above, spread marker, bids (green) below |
+| Right | `TradeTape` | Time & sales with uptick/downtick, value, self-trade "You" badge |
+| Bottom | `StatusBar` | WS state, client, trade count, volume, levels, timezone, version |
+
+## State Management
+
+The Zustand store (`src/store/market-data-store.ts`) handles:
+
+- **Snapshot**: initializes bids, asks, stats, chart points
+- **Book deltas**: upserts/removes price levels with cumulative tracking
+- **Trades**: newest-first ring buffer (120 entries)
+- **Stats**: trade count, volume, spread, mid-price, MPS
+- **PnL**: per-client position and P&L tracking
+- **Telemetry**: `engineLatencyNs` from deltas/trades, `messagesPerSecond` from stats
+- **Self-trade detection**: submitted order IDs tracked in a `Set<number>`
+- **Sequence gap detection**: triggers resync via WebSocket subscribe message
+
+## WebSocket Connection
+
+`src/hooks/use-market-data-websocket.ts` manages:
+
+- Auto-connect to `/ws/market` with exponential backoff reconnect
+- Subscribe message with configurable depth
+- Sequence gap detection → automatic resync
+- Cleanup on unmount
+
+## Testing
+
+```powershell
+npm run test:run    # vitest run
+npm run build       # tsc + vite build
+```
+
+## Project Structure
+
+```text
+src/
+├── App.tsx                          # Root layout
+├── main.tsx                         # Entry point
+├── index.css                        # Design tokens + Tailwind
+├── components/
+│   ├── mid-price-chart.tsx
+│   ├── order-book-ladder.tsx
+│   ├── order-entry-form.tsx
+│   ├── pnl-card.tsx
+│   ├── stats-strip.tsx
+│   ├── status-bar.tsx
+│   ├── system-health.tsx
+│   ├── top-bar.tsx
+│   ├── trade-tape.tsx
+│   └── ui/                          # Primitives (badge, button, card, input, label)
+├── hooks/
+│   └── use-market-data-websocket.ts
+├── lib/
+│   ├── format.ts                    # Number/clock formatters
+│   ├── types.ts                     # DTOs matching backend envelope payloads
+│   └── utils.ts                     # cn() helper
+├── store/
+│   ├── market-data-store.ts
+│   └── market-data-store.test.ts
+└── test/
+    └── setup.ts                     # Vitest setup
 ```

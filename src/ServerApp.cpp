@@ -110,6 +110,29 @@ namespace Mercury {
             }
         });
 
+        // Binary market data — raw packed structs for book_delta and trade.
+        // No snapshot on connect; binary clients should use the JSON WebSocket
+        // or GET /api/state for initial state.
+        app.ws<PerSocketData>("/ws/market/bin", {
+            .compression = uWS::DISABLED,
+            .maxPayloadLength = 1024 * 1024,
+            .idleTimeout = 30,
+            .maxBackpressure = 1024 * 1024,
+            .closeOnBackpressureLimit = false,
+            .resetIdleTimeoutOnSend = false,
+            .sendPingsAutomatically = true,
+            .open = [&publisher](auto* ws) {
+                ws->subscribe(MarketDataPublisher::TOPIC_BIN);
+                publisher.incrementConnections();
+            },
+            .message = [](auto* /*ws*/, std::string_view /*message*/, uWS::OpCode /*opCode*/) {
+                // Binary path is read-only; ignore client messages.
+            },
+            .close = [&publisher](auto* /*ws*/, int /*code*/, std::string_view /*message*/) {
+                publisher.decrementConnections();
+            }
+        });
+
         app.listen(options.host, options.port, [&publisher, &app, &listening, &options](auto* listenSocket) {
             listening = listenSocket != nullptr;
             if (listenSocket) {

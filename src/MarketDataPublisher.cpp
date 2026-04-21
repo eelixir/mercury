@@ -1,4 +1,5 @@
 #include "MarketDataPublisher.h"
+#include "BinaryProtocol.h"
 
 #include <nlohmann/json.hpp>
 #include <string>
@@ -60,9 +61,11 @@ namespace Mercury {
             {"quantity", delta.quantity},
             {"orderCount", delta.orderCount},
             {"action", bookDeltaActionToString(delta.action)},
-            {"timestamp", delta.timestamp}
+            {"timestamp", delta.timestamp},
+            {"engineLatencyNs", delta.engineLatencyNs}
         };
         broadcast(envelopeToJson("book_delta", delta.sequence, delta.symbol, std::move(payload)).dump());
+        broadcastBinary(serializeBinary(delta));
     }
 
     void MarketDataPublisher::onTradeEvent(const TradeEvent& trade) {
@@ -74,9 +77,11 @@ namespace Mercury {
             {"sellOrderId", trade.sellOrderId},
             {"buyClientId", trade.buyClientId},
             {"sellClientId", trade.sellClientId},
-            {"timestamp", trade.timestamp}
+            {"timestamp", trade.timestamp},
+            {"engineLatencyNs", trade.engineLatencyNs}
         };
         broadcast(envelopeToJson("trade", trade.sequence, trade.symbol, std::move(payload)).dump());
+        broadcastBinary(serializeBinary(trade));
     }
 
     void MarketDataPublisher::onStatsEvent(const StatsEvent& stats) {
@@ -90,7 +95,8 @@ namespace Mercury {
             {"bestAsk", stats.bestAsk ? json(*stats.bestAsk) : json(nullptr)},
             {"spread", stats.spread},
             {"midPrice", stats.midPrice},
-            {"timestamp", stats.timestamp}
+            {"timestamp", stats.timestamp},
+            {"messagesPerSecond", stats.messagesPerSecond}
         };
         broadcast(envelopeToJson("stats", stats.sequence, stats.symbol, std::move(payload)).dump());
     }
@@ -123,6 +129,25 @@ namespace Mercury {
 
         loop->defer([app, message = std::move(message)]() mutable {
             app->publish(TOPIC, message, uWS::OpCode::TEXT, false);
+        });
+    }
+
+    void MarketDataPublisher::broadcastBinary(std::string message) {
+        uWS::Loop* loop = nullptr;
+        uWS::App* app = nullptr;
+
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            loop = loop_;
+            app = app_;
+        }
+
+        if (!loop || !app) {
+            return;
+        }
+
+        loop->defer([app, message = std::move(message)]() mutable {
+            app->publish(TOPIC_BIN, message, uWS::OpCode::BINARY, false);
         });
     }
 

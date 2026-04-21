@@ -30,6 +30,8 @@ interface MarketDataState {
   activeClientId: number
   lastOrderResponse: OrderResponse | null
   submittedOrderIds: Set<number>
+  engineLatencyNs: number | null
+  messagesPerSecond: number
   setConnectionState: (state: ConnectionState) => void
   setActiveClientId: (clientId: number) => void
   setLastOrderResponse: (response: OrderResponse | null) => void
@@ -60,6 +62,8 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
   activeClientId: 1,
   lastOrderResponse: null,
   submittedOrderIds: new Set<number>(),
+  engineLatencyNs: null,
+  messagesPerSecond: 0,
   setConnectionState: (connectionState) => set({ connectionState }),
   setActiveClientId: (activeClientId) => set({ activeClientId }),
   setLastOrderResponse: (lastOrderResponse) => set({ lastOrderResponse }),
@@ -119,6 +123,11 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
           orderCount: envelope.payload.orderCount,
         }
 
+        const latencyUpdate =
+          envelope.payload.engineLatencyNs != null && envelope.payload.engineLatencyNs > 0
+            ? { engineLatencyNs: envelope.payload.engineLatencyNs }
+            : {}
+
         return {
           symbol: envelope.symbol,
           sequence: envelope.sequence,
@@ -130,14 +139,21 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
             envelope.payload.side === 'sell'
               ? upsertLevel(state.asks, nextLevel, false)
               : state.asks,
+          ...latencyUpdate,
         }
       }
 
       if (envelope.type === 'trade') {
+        const latencyUpdate =
+          envelope.payload.engineLatencyNs != null && envelope.payload.engineLatencyNs > 0
+            ? { engineLatencyNs: envelope.payload.engineLatencyNs }
+            : {}
+
         return {
           symbol: envelope.symbol,
           sequence: envelope.sequence,
           trades: [envelope.payload, ...state.trades].slice(0, MAX_TRADES),
+          ...latencyUpdate,
         }
       }
 
@@ -154,6 +170,7 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
           sequence: envelope.sequence,
           stats: envelope.payload,
           chartPoints: nextPoints,
+          messagesPerSecond: envelope.payload.messagesPerSecond ?? state.messagesPerSecond,
         }
       }
 

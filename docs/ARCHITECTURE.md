@@ -149,6 +149,12 @@ Every outbound event carries:
 - `symbol`
 - `payload`
 
+Telemetry fields added in Phase 6:
+
+- `BookDelta.engineLatencyNs`: nanoseconds from gateway entry to book mutation (0 for replay or non-gateway orders)
+- `TradeEvent.engineLatencyNs`: nanoseconds from gateway entry to trade generation
+- `StatsEvent.messagesPerSecond`: engine-thread throughput sampled every ~1 second
+
 Sequence semantics:
 
 - a single monotonically increasing sequence spans `book_delta`, `trade`, `stats`, and `pnl`
@@ -170,16 +176,18 @@ HTTP endpoints:
 - `GET /api/state`
 - `POST /api/orders`
 
-WebSocket endpoint:
+WebSocket endpoints:
 
-- `/ws/market`
+- `/ws/market` — JSON text frames (snapshot on connect, then deltas/trades/stats/pnl)
+- `/ws/market/bin` — binary frames using packed structs from `BinaryProtocol.h` (no snapshot on connect; binary clients should use JSON WebSocket or `GET /api/state` for initial state)
 
 Current behavior:
 
 - binds to `127.0.0.1` by default
 - accepts browser order entry over HTTP only
 - keeps WebSocket read-only except for subscribe messages that request depth
-- sends one `snapshot` on connect, then publishes `book_delta`, `trade`, `stats`, and `pnl`
+- JSON path sends one `snapshot` on connect, then publishes `book_delta`, `trade`, `stats`, and `pnl`
+- binary path sends only `book_delta` and `trade` as packed structs
 
 ### MarketDataPublisher
 
@@ -193,6 +201,20 @@ Important thread-handoff rule:
 
 That separation is what keeps WebSocket threads from touching the order book.
 
+### Binary Protocol
+
+Relevant file:
+
+- `include/BinaryProtocol.h`
+
+Fixed-width `#pragma pack(push, 1)` structs for wire-efficient streaming:
+
+- `BinaryHeader` (4 bytes): type (1=book_delta, 2=trade), reserved, length
+- `BinaryBookDelta` (53 bytes): header + sequence, side, price, quantity, orderCount, action, timestamp, engineLatencyNs
+- `BinaryTradeEvent` (77 bytes): header + sequence, tradeId, price, quantity, orderIds, clientIds, timestamp, engineLatencyNs
+
+All fields are little-endian (host-order on x86/x64).
+
 ## Frontend Architecture
 
 Relevant frontend areas:
@@ -200,19 +222,23 @@ Relevant frontend areas:
 - `frontend/src/store/market-data-store.ts`
 - `frontend/src/hooks/use-market-data-websocket.ts`
 - `frontend/src/components/`
+- `frontend/src/lib/types.ts`
 - `frontend/src/App.tsx`
 
 State model:
 
 - one live store keyed by symbol
-- tracked fields include sequence, bids, asks, trades, stats, connection state, and per-client PnL
+- tracked fields include sequence, bids, asks, trades, stats, connection state, per-client PnL, engine latency, and throughput
+- submitted order IDs are tracked in a `Set<number>` for self-trade detection in the trade tape
 
 UI layout:
 
-- top row: system status, spread, mid, top-of-book, volume, trade count, connection state
-- left column: order entry and active client PnL
-- center column: ladder with asks above and bids below
-- right column: scrolling trade tape
+- **Top Bar**: system status, spread, mid, top-of-book, connection state, clock
+- **Stats Strip**: bid, ask, mid, spread, spread bps, trades, volume, orders, bid/ask levels
+- **Left column**: order entry form, PnL card, system health card
+- **Center column**: mid-price chart (lightweight-charts) above, L2 order book ladder below
+- **Right column**: scrolling trade tape with uptick/downtick, self-trade highlighting ("You" badge)
+- **Status Bar**: WS state, active client, trade count, volume, bid/ask levels, timezone, version
 
 Client behavior:
 
@@ -220,6 +246,9 @@ Client behavior:
 - subsequent deltas update only affected levels
 - sequence gaps trigger resync logic instead of blindly applying out-of-order frames
 - order entry uses `POST /api/orders` with an editable `clientId`
+- submitted order IDs are tracked so the trade tape can highlight the user's own fills
+- `engineLatencyNs` from `book_delta` and `trade` payloads feeds the System Health card
+- `messagesPerSecond` from `stats` payloads feeds the System Health card
 
 ## Contract Boundaries
 
@@ -227,9 +256,9 @@ The current v1 boundaries are intentional:
 
 - single-book core engine
 - symbol only at API and frontend layer
-- JSON-only transport
+- JSON primary transport, binary secondary transport for throughput-sensitive consumers
 - HTTP for order submission
-- WebSocket for read-only market data
+- WebSocket for read-only market data (JSON and binary paths)
 - separate Vite app for frontend development
 
 Do not collapse these boundaries casually during unrelated work.

@@ -14,25 +14,27 @@ The core engine is still single-book and single-writer. Symbol support is only c
 - risk checks and PnL tracking
 - CSV parsing, replay-style processing, and file outputs
 - localhost server mode with:
-  - `POST /api/orders`
+  - `POST /api/orders` (handled by `OrderEntryGateway`)
   - `GET /api/health`
   - `GET /api/state`
-  - `GET /ws/market`
+  - `/ws/market` (JSON text frames)
+  - `/ws/market/bin` (binary packed frames)
 - sequenced market-data events:
   - `snapshot`
-  - `book_delta`
-  - `trade`
-  - `stats`
+  - `book_delta` (includes `engineLatencyNs`)
+  - `trade` (includes `engineLatencyNs`)
+  - `stats` (includes `messagesPerSecond`)
   - `pnl`
+- engine telemetry: gateway-to-engine latency (nanoseconds), throughput counter (messages/second)
 - React + Vite + TypeScript frontend in `/frontend`
-- Google Test backend coverage and Vitest frontend coverage
+- Google Test backend coverage (243 tests) and Vitest frontend coverage
 
 ## Repo Layout
 
 ```text
 mercury/
-|-- include/            # Core headers, server headers, market-data DTOs
-|-- src/                # Engine, service, server, CLI entry point
+|-- include/            # Core headers, server headers, market-data DTOs, binary protocol
+|-- src/                # Engine, service, server, gateway, publisher, CLI entry point
 |-- tests/              # Google Test suites
 |-- benchmarks/         # Optional benchmark target
 |-- docs/               # Architecture and workflow docs
@@ -41,6 +43,13 @@ mercury/
 |-- AGENTS.md           # Repo-specific agent guidance
 `-- CMakeLists.txt
 ```
+
+Key server-side files:
+
+- `include/ServerHelpers.h` — shared JSON/HTTP helpers
+- `include/OrderEntryGateway.h` / `src/OrderEntryGateway.cpp` — HTTP order entry handler
+- `include/MarketDataPublisher.h` / `src/MarketDataPublisher.cpp` — WebSocket publisher
+- `include/BinaryProtocol.h` — packed binary wire-format structs
 
 Start with [AGENTS.md](AGENTS.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), and [docs/WORKFLOWS.md](docs/WORKFLOWS.md) before making large changes.
 
@@ -140,6 +149,8 @@ Returns engine and connection metadata:
 
 ### `POST /api/orders`
 
+Handled by `OrderEntryGateway`. The gateway parses JSON, submits to the engine thread synchronously, and returns the execution result.
+
 Supported request types:
 
 - `limit`
@@ -180,7 +191,9 @@ Example response:
 
 ## WebSocket API
 
-Connect to `/ws/market`.
+### JSON Path — `/ws/market`
+
+Connect to `/ws/market` for JSON text frames.
 
 Connection behavior:
 
@@ -206,11 +219,48 @@ Envelope shape:
   "type": "book_delta",
   "sequence": 42,
   "symbol": "SIM",
-  "payload": {}
+  "payload": {
+    "side": "buy",
+    "price": 100,
+    "quantity": 5,
+    "orderCount": 1,
+    "action": "upsert",
+    "timestamp": 1713660000000,
+    "engineLatencyNs": 4200
+  }
 }
 ```
 
+Telemetry fields in payloads:
+
+- `book_delta.payload.engineLatencyNs` — gateway-to-mutation latency in nanoseconds (0 for replay orders)
+- `trade.payload.engineLatencyNs` — gateway-to-trade latency in nanoseconds (0 for replay orders)
+- `stats.payload.messagesPerSecond` — engine-thread throughput sampled every ~1 second
+
 The frontend uses `sequence` to ignore stale frames and detect gaps that require a resync.
+
+### Binary Path — `/ws/market/bin`
+
+Connect to `/ws/market/bin` for packed binary frames (book deltas and trades only).
+
+- No snapshot on connect. Binary clients should use `GET /api/state` or the JSON WebSocket for initial state.
+- Message format is defined by packed structs in `include/BinaryProtocol.h`.
+- Read `BinaryHeader.type` (1 = book_delta, 2 = trade) to determine the struct layout.
+- All fields are little-endian (host-order on x86/x64).
+
+## Frontend Dashboard
+
+The React dashboard (`/frontend`) provides:
+
+- **Top Bar** — symbol, mid-price, spread, connection status, clock
+- **Stats Strip** — bid, ask, mid, spread, spread bps, trades, volume, orders, bid/ask levels
+- **Order Entry Form** — limit/market/cancel/modify with buy/sell toggle, price, qty, clientId, loading state
+- **Position / PnL Card** — net position, total PnL, realized, unrealized (green/red coloring)
+- **System Health Card** — engine latency (color-coded), throughput (msg/s), connection indicator
+- **Mid-Price Chart** — lightweight-charts line chart with delta tracking
+- **Order Book Ladder** — L2 depth with asks (red) above, spread marker, bids (green) below, cumulative size bars
+- **Trade Tape** — time & sales with uptick/downtick arrows, value column, self-trade highlighting ("You" badge)
+- **Status Bar** — WS state, active client, trade count, volume, bid/ask levels, timezone, version
 
 ## Other Runtime Modes
 
@@ -254,13 +304,13 @@ npm run test:run
 npm run build
 ```
 
-The current backend suite includes market-data coverage for top-of-book extraction, event sequencing, and engine-service publication flow. The frontend suite covers snapshot and delta application in the Zustand store.
+The current backend suite (243 tests) includes market-data coverage for top-of-book extraction, event sequencing, and engine-service publication flow. The frontend suite covers snapshot and delta application in the Zustand store.
 
 ## Current V1 Boundaries
 
 - localhost only, no auth
 - single book in core engine
-- JSON wire format only
+- JSON primary transport, binary secondary transport for throughput-sensitive consumers
 - browser writes go over HTTP, not WebSocket
 - frontend is a separate dev app, not served by the C++ binary
 

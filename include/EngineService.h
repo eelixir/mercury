@@ -49,6 +49,7 @@ namespace Mercury {
 
         uint64_t allocateOrderId();
         ExecutionResult submitOrder(Order order);
+        ExecutionResult submitOrder(Order order, uint64_t entryTimestampNs);
         L2Snapshot getSnapshot(size_t depth = 20);
         EngineState getState();
 
@@ -83,6 +84,17 @@ namespace Mercury {
 
         uint64_t currentSequence_ = 0;
 
+        // Latency tracking — set on the engine thread before each
+        // engine_.submitOrder() and read by callbacks during that call.
+        uint64_t entryTimestampNs_ = 0;
+
+        // Throughput counter — incremented by each outbound event,
+        // sampled every ~1 second inside publishStats().
+        uint64_t messageCount_ = 0;
+        uint64_t lastMpsTimestamp_ = 0;
+        uint64_t lastMessageCount_ = 0;
+        uint64_t currentMps_ = 0;
+
         void engineLoop();
         void enqueue(Task task);
 
@@ -96,6 +108,7 @@ namespace Mercury {
         L2Snapshot buildSnapshot(size_t depth) const;
         uint64_t nextSequence() { return ++currentSequence_; }
         static uint64_t wallTimestampMillis();
+        static uint64_t steadyNowNs();
     };
 
     template <typename F>

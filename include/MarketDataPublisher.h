@@ -22,6 +22,7 @@ namespace Mercury {
     class MarketDataPublisher : public MarketDataSink {
     public:
         static constexpr std::string_view TOPIC = "market";
+        static constexpr std::string_view TOPIC_BIN = "market_bin";
 
         MarketDataPublisher() = default;
         ~MarketDataPublisher() override = default;
@@ -49,6 +50,7 @@ namespace Mercury {
 
     private:
         void broadcast(std::string message);
+        void broadcastBinary(std::string message);
 
         mutable std::mutex mutex_;
         uWS::Loop* loop_ = nullptr;

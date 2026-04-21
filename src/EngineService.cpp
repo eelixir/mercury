@@ -68,6 +68,10 @@ namespace Mercury {
     }
 
     ExecutionResult EngineService::submitOrder(Order order) {
+        return submitOrder(std::move(order), 0);
+    }
+
+    ExecutionResult EngineService::submitOrder(Order order, uint64_t entryTimestampNs) {
         if (!running_.load()) {
             start();
         }
@@ -78,8 +82,10 @@ namespace Mercury {
             order.id = allocateOrderId();
         }
 
-        return invoke([this, order]() mutable {
+        return invoke([this, order, entryTimestampNs]() mutable {
+            entryTimestampNs_ = entryTimestampNs;
             auto result = engine_.submitOrder(order);
+            entryTimestampNs_ = 0;
             publishStats();
             return result;
         });
@@ -246,6 +252,10 @@ namespace Mercury {
         delta.orderCount = mutation.orderCount;
         delta.action = mutation.action;
         delta.timestamp = mutation.timestamp;
+        if (entryTimestampNs_ != 0) {
+            delta.engineLatencyNs = steadyNowNs() - entryTimestampNs_;
+        }
+        ++messageCount_;
 
         std::lock_guard<std::mutex> lock(sinkMutex_);
         if (sink_) {
@@ -267,6 +277,10 @@ namespace Mercury {
         event.buyClientId = trade.buyClientId;
         event.sellClientId = trade.sellClientId;
         event.timestamp = trade.timestamp;
+        if (entryTimestampNs_ != 0) {
+            event.engineLatencyNs = steadyNowNs() - entryTimestampNs_;
+        }
+        ++messageCount_;
 
         std::lock_guard<std::mutex> lock(sinkMutex_);
         if (sink_) {
@@ -284,6 +298,7 @@ namespace Mercury {
         event.unrealizedPnL = snapshot.unrealizedPnL;
         event.totalPnL = snapshot.totalPnL;
         event.timestamp = snapshot.timestamp;
+        ++messageCount_;
 
         std::lock_guard<std::mutex> lock(sinkMutex_);
         if (sink_) {
@@ -307,6 +322,18 @@ namespace Mercury {
         stats.spread = book.getSpread();
         stats.midPrice = book.getMidPrice();
         stats.timestamp = wallTimestampMillis();
+
+        // MPS — sample throughput every ~1 second.
+        uint64_t nowMs = stats.timestamp;
+        uint64_t elapsedMs = nowMs - lastMpsTimestamp_;
+        if (elapsedMs >= 1000) {
+            uint64_t deltaMessages = messageCount_ - lastMessageCount_;
+            currentMps_ = (deltaMessages * 1000) / elapsedMs;
+            lastMpsTimestamp_ = nowMs;
+            lastMessageCount_ = messageCount_;
+        }
+        stats.messagesPerSecond = currentMps_;
+        ++messageCount_;
 
         std::lock_guard<std::mutex> lock(sinkMutex_);
         if (sink_) {
@@ -336,6 +363,13 @@ namespace Mercury {
         auto now = std::chrono::time_point_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now());
         return static_cast<uint64_t>(now.time_since_epoch().count());
+    }
+
+    uint64_t EngineService::steadyNowNs() {
+        auto now = std::chrono::steady_clock::now();
+        return static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                now.time_since_epoch()).count());
     }
 
 }

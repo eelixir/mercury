@@ -60,6 +60,7 @@ namespace Mercury {
         size_t orderCount = 0;
         BookDeltaAction action = BookDeltaAction::Upsert;
         uint64_t timestamp = 0;
+        uint64_t engineLatencyNs = 0;
     };
 
     struct TradeEvent {
@@ -73,6 +74,7 @@ namespace Mercury {
         uint64_t buyClientId = 0;
         uint64_t sellClientId = 0;
         uint64_t timestamp = 0;
+        uint64_t engineLatencyNs = 0;
     };
 
     struct StatsEvent {
@@ -88,6 +90,7 @@ namespace Mercury {
         int64_t spread = 0;
         int64_t midPrice = 0;
         uint64_t timestamp = 0;
+        uint64_t messagesPerSecond = 0;
     };
 
     struct PnLEvent {

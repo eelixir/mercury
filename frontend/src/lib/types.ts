@@ -27,6 +27,7 @@ export interface BookDeltaPayload {
   orderCount: number
   action: 'upsert' | 'remove'
   timestamp: number
+  engineLatencyNs?: number
 }
 
 export interface TradePayload {
@@ -38,6 +39,7 @@ export interface TradePayload {
   buyClientId: number
   sellClientId: number
   timestamp: number
+  engineLatencyNs?: number
 }
 
 export interface StatsPayload {
@@ -51,6 +53,7 @@ export interface StatsPayload {
   spread: number
   midPrice: number
   timestamp: number
+  messagesPerSecond?: number
 }
 
 export interface PnLPayload {

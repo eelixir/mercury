@@ -38,8 +38,14 @@ Read first:
 - `include/MarketData.h`
 - `include/EngineService.h`
 - `include/ServerApp.h`
+- `include/OrderEntryGateway.h`
+- `include/MarketDataPublisher.h`
+- `include/BinaryProtocol.h`
+- `include/ServerHelpers.h`
 - `src/EngineService.cpp`
 - `src/ServerApp.cpp`
+- `src/OrderEntryGateway.cpp`
+- `src/MarketDataPublisher.cpp`
 - `tests/market_data_test.cpp`
 - `frontend/src/store/market-data-store.ts`
 
@@ -51,6 +57,8 @@ Required checks:
 - snapshot depth remains clamped to `1..100`
 - replay and HTTP orders still feed the same engine path
 - frontend store still understands the emitted envelope shape
+- telemetry fields (`engineLatencyNs`, `messagesPerSecond`) are populated correctly
+- both JSON (`/ws/market`) and binary (`/ws/market/bin`) paths publish consistently
 
 Minimum validation:
 
@@ -65,8 +73,10 @@ Recommended manual smoke test:
 1. Start the server with `.\build\mercury.exe --server --port 9001`.
 2. Start the frontend with `npm run dev` inside `frontend/`.
 3. Submit a buy and sell order from the browser or with `POST /api/orders`.
-4. Confirm the ladder, trade tape, stats, and PnL update.
-5. Refresh the browser and confirm the UI resyncs from a fresh snapshot.
+4. Confirm the ladder, trade tape, stats, PnL, and system health card update.
+5. Confirm self-trade highlighting appears in the trade tape ("You" badge).
+6. Refresh the browser and confirm the UI resyncs from a fresh snapshot.
+7. Optionally connect a raw WebSocket client to `/ws/market/bin` and verify binary frames arrive.
 
 ## 3. Changing Frontend Dashboard Behavior
 
@@ -78,6 +88,7 @@ Read first:
 - `frontend/src/store/market-data-store.ts`
 - `frontend/src/hooks/use-market-data-websocket.ts`
 - `frontend/src/components/`
+- `frontend/src/lib/types.ts`
 - `frontend/src/store/market-data-store.test.ts`
 
 Rules:

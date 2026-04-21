@@ -26,10 +26,10 @@ Current frontend app:
 
 Primary code areas:
 
-- `include/`: core headers, market-data DTOs, engine-service, server interfaces
-- `src/`: matching engine, service layer, server runtime, CLI entry point
+- `include/`: core headers, market-data DTOs, engine-service, server interfaces, binary protocol
+- `src/`: matching engine, service layer, server runtime, order-entry gateway, publisher, CLI entry point
 - `tests/`: backend correctness and sequencing coverage
-- `frontend/src/`: browser UI, Zustand store, WebSocket handling, order entry
+- `frontend/src/`: browser UI, Zustand store, WebSocket handling, order entry, system health
 - `docs/`: architecture and workflow docs
 
 Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/WORKFLOWS.md](docs/WORKFLOWS.md) before making large changes.
@@ -51,9 +51,11 @@ Do not assume an older README claim still matches the build. Verify it in code.
 
 - `MatchingEngine` remains the single-book core.
 - `EngineService` owns live engine mutation on a dedicated engine thread.
+- `OrderEntryGateway` handles HTTP order parsing and delegates synchronously to `EngineService`.
 - WebSocket threads do not read the order book directly.
 - Market-data snapshots and deltas are produced on the engine thread after mutation.
 - WebSocket publishing is deferred onto the uWebSockets loop.
+- Telemetry (latency, MPS) is computed on the engine thread using out-of-band state, not by modifying `Order`.
 - Symbol support is API-level only in v1. Do not push symbol into core order types unless the task explicitly requires that broader refactor.
 
 ## Working Rules For Agents
@@ -141,9 +143,11 @@ See [docs/WORKFLOWS.md](docs/WORKFLOWS.md) for concrete checklists.
 
 - `include/OrderBook.h`: resting-order ownership, lookup consistency, price-level maintenance
 - `src/MatchingEngine.cpp`: matching semantics, TIF behavior, callbacks, modify/cancel logic
-- `src/EngineService.cpp`: engine-thread serialization, sequencing, replay, stats and PnL publication
-- `src/ServerApp.cpp`: request parsing, JSON contract, WebSocket lifecycle, publish handoff
-- `frontend/src/store/market-data-store.ts`: sequence handling and state application
+- `src/EngineService.cpp`: engine-thread serialization, sequencing, replay, stats/PnL/telemetry publication
+- `src/OrderEntryGateway.cpp`: request parsing, latency stamping, synchronous engine roundtrip
+- `src/ServerApp.cpp`: HTTP/WS route registration, JSON and binary WebSocket lifecycle, publish handoff
+- `src/MarketDataPublisher.cpp`: JSON and binary serialization, topic routing
+- `frontend/src/store/market-data-store.ts`: sequence handling, telemetry tracking, and state application
 - `frontend/src/hooks/use-market-data-websocket.ts`: reconnect and resync behavior
 
 ## Documentation Maintenance Rule

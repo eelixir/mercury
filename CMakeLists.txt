@@ -230,6 +230,7 @@ set(MERCURY_HEADERS
     include/ServerApp.h
     include/ServerHelpers.h
     include/OrderEntryGateway.h
+    include/BinaryProtocol.h
 )
 target_sources(mercury_lib PRIVATE ${MERCURY_HEADERS})
 

@@ -3,6 +3,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <chrono>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -43,7 +44,12 @@ namespace Mercury {
         try {
             const auto parsed = json::parse(body);
             Order order = helpers::parseOrderFromJson(parsed, engine_);
-            ExecutionResult result = engine_.submitOrder(order);
+
+            auto entryNs = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count());
+
+            ExecutionResult result = engine_.submitOrder(order, entryNs);
             helpers::writeJson(res, "200 OK",
                                helpers::executionResultToJson(order, result));
         } catch (const std::exception& ex) {
@@ -55,3 +61,4 @@ namespace Mercury {
     }
 
 }
+

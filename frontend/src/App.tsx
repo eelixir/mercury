@@ -5,6 +5,7 @@ import { OrderEntryForm } from './components/order-entry-form'
 import { PnLCard } from './components/pnl-card'
 import { StatsStrip } from './components/stats-strip'
 import { StatusBar } from './components/status-bar'
+import { SystemHealth } from './components/system-health'
 import { TopBar } from './components/top-bar'
 import { TradeTape } from './components/trade-tape'
 import { useMarketDataWebSocket } from './hooks/use-market-data-websocket'
@@ -28,6 +29,7 @@ function App() {
         <div className="flex min-h-0 flex-col gap-1.5">
           <OrderEntryForm />
           <PnLCard />
+          <SystemHealth />
         </div>
 
         <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_minmax(0,1.2fr)] gap-1.5">
