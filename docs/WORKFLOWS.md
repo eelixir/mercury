@@ -81,7 +81,7 @@ Recommended manual smoke test:
 3. Confirm the ladder and trade tape are active before any manual order is submitted.
 4. Submit a buy or sell order from the browser or with `POST /api/orders`.
 5. Confirm the ladder, trade tape, stats, simulation controls, PnL, and system health card update.
-6. Call `POST /api/simulation/control` with `pause`, `resume`, and `set_volatility` and confirm the UI changes.
+6. Call `POST /api/simulation/control` with `pause`, `resume`, `set_volatility`, or `set_regime` (`calm`, `normal`, `stressed`) and confirm the UI changes.
 7. Confirm self-trade highlighting appears in the trade tape.
 8. Refresh the browser and confirm the UI resyncs from a fresh snapshot.
 9. Optionally connect a raw WebSocket client to `/ws/market/bin` and verify binary frames arrive.
@@ -188,6 +188,12 @@ ctest --test-dir build --output-on-failure
 .\build\mercury.exe --sim --headless --sim-speed 25 --sim-seed 42 --sim-duration-ms 30000 --sim-volatility normal
 ```
 
+Add Poisson-flow noise traders to stress arrival intensity:
+
+```powershell
+.\build\mercury.exe --sim --headless --sim-volatility high --noise-count 3 --sim-duration-ms 30000
+```
+
 ### Run Frontend
 
 ```powershell
@@ -236,6 +242,16 @@ Invoke-RestMethod `
   -Uri http://127.0.0.1:9001/api/simulation/control `
   -ContentType "application/json" `
   -Body '{"action":"set_volatility","volatility":"high"}'
+```
+
+Force a specific regime (supported values: `calm`, `normal`, `stressed`):
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri http://127.0.0.1:9001/api/simulation/control `
+  -ContentType "application/json" `
+  -Body '{"action":"set_regime","volatility":"stressed"}'
 ```
 
 ## 7. Practical Review Checklist

@@ -55,6 +55,7 @@ Simulation and server flags:
 - `--mm-count <n>`
 - `--mom-count <n>`
 - `--mr-count <n>`
+- `--noise-count <n>` (Poisson-flow noise traders)
 - `--sim-duration-ms <n>`
 
 Legacy `--strategies` and `--backtest` flags still exist for migration safety, but the intended architecture is the unified runtime above the engine.
@@ -158,6 +159,7 @@ Environment state currently includes:
 - momentum-burst state
 - simulation timestamp
 - realized volatility and average spread summaries
+- a per-symbol `RegimeManager` exposing the current regime label and the three arrival intensities
 
 Current v1 environment dynamics are intentionally bounded:
 
@@ -170,6 +172,7 @@ Built-in agent personalities:
 - passive market maker
 - aggressive momentum trader
 - mean-reversion bot
+- Poisson-flow noise trader (rate-driven resting, cancel, and marketable flow)
 
 Agents consume:
 
@@ -177,7 +180,7 @@ Agents consume:
 - recent trades
 - current stats
 - their own live orders, position, and PnL
-- an environment view that exposes allowed scenario state
+- an environment view that exposes allowed scenario state, including the current regime label, arrival intensities, and order-size dispersion
 
 Agents emit engine-agnostic intents:
 
@@ -192,6 +195,41 @@ Behavior notes:
 - passive market makers are expected to keep the book two-sided even under inventory pressure
 - aggressive momentum agents are capped so they stress liquidity without dominating price formation by themselves
 - mean-reversion agents and fair-value pullback act as stabilizers after overshoots
+
+### Regime Manager And Arrival Intensities
+
+Relevant files:
+
+- `include/RegimeManager.h`
+- `src/RegimeManager.cpp`
+
+`RegimeManager` replaces generic "volatility" knobs with explicit control of market micro-dynamics. Each `PerSymbolEnvironment` owns one `RegimeManager` instance.
+
+Three independent Poisson λ values govern order arrivals, expressed as expected events per millisecond:
+
+- `limitLambda` drives new resting orders
+- `cancelLambda` drives removals of existing orders
+- `marketableLambda` drives orders crossing the spread
+
+Base intensities come from the active volatility preset. They are then scaled by the current `MarketRegime`:
+
+- `Calm`: thinner tails, sparser crossings, slightly faster passive posting
+- `Normal`: preset baseline, no scaling applied
+- `Stressed`: `limitLambda` ×0.5, `cancelLambda` ×2.0, `marketableLambda` ×2.0, fatter Pareto tail for order sizes
+
+The regime is auto-detected on every simulation tick from realized volatility and momentum-burst state, with hysteresis so single-tick spikes do not trigger transitions. Manual overrides via `forceRegime()` hold the target regime for a short dwell window before auto-detection resumes.
+
+Order sizes are drawn from a Pareto (power-law) distribution so flow mixes frequent small "retail" prints with rare large "whale" trades. The exponent tightens in Calm and loosens in Stressed. Both the intensities and the dispersion are surfaced on `SimulationEnvironmentView` so custom agents can sample from them without holding a reference to the manager.
+
+### PoissonFlowAgent
+
+`PoissonFlowAgent` is the noise-trader personality that consumes the regime's arrival intensities. On each wake it samples, for each arrival type, a Poisson event count across the elapsed interval and emits that many intents:
+
+- cancels pick uniformly among the agent's own resting orders
+- marketable IOC orders fire on either side when opposing liquidity exists
+- limit orders rest near top-of-book with a small random book-offset
+
+Sizes come from `RegimeManager::sampleOrderSize`. The agent carries its own RNG seeded deterministically from `(simulation seed, symbol index, agent index)` so reproducibility is preserved across runs.
 
 ### EngineService
 
@@ -368,6 +406,7 @@ High-signal backend suites:
 - `tests/matching_engine_test.cpp`
 - `tests/market_data_test.cpp`
 - `tests/simulation_runtime_test.cpp`
+- `tests/regime_manager_test.cpp`
 - `tests/order_validation_test.cpp`
 - `tests/risk_manager_test.cpp`
 - `tests/pnl_tracker_test.cpp`
@@ -384,3 +423,12 @@ For market-runtime or dashboard changes, treat both backend and frontend tests a
 - long-run two-sided book maintenance
 - continued trading over time
 - bounded volatility excursion under deterministic accelerated simulation
+
+`tests/regime_manager_test.cpp` covers:
+
+- regime-scaled arrival intensities (Calm, Normal, Stressed) against the documented multipliers
+- auto-detection into Stressed on sustained realized volatility, and Calm on a quiet tape
+- `forceRegime` hold-down keeping a manual override stable against short observations
+- Pareto order-size dispersion producing whale-vs-retail distributions within expected tail bounds
+- `samplePoissonCount` matching the expected mean across many draws
+- runtime integration: `MarketRuntimeState` publishes regime label + λ values, and enabling noise traders measurably increases traded volume

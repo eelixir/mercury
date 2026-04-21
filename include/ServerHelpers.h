@@ -214,8 +214,13 @@ namespace Mercury {
                 {"marketMakerCount", state.marketMakerCount},
                 {"momentumCount", state.momentumCount},
                 {"meanReversionCount", state.meanReversionCount},
+                {"noiseTraderCount", state.noiseTraderCount},
                 {"realizedVolatilityBps", state.realizedVolatilityBps},
-                {"averageSpread", state.averageSpread}
+                {"averageSpread", state.averageSpread},
+                {"regime", state.regime},
+                {"limitLambda", state.limitLambda},
+                {"cancelLambda", state.cancelLambda},
+                {"marketableLambda", state.marketableLambda}
             };
             return envelopeToJson("sim_state", state.sequence, state.symbol, std::move(payload)).dump();
         }

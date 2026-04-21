@@ -22,7 +22,8 @@ Mercury is a low-latency trading engine implementing a full limit order book wit
 - **Risk Management:** Pre-trade risk checks with position/exposure limits
 - **P&L Tracking:** Realized and unrealized P&L with FIFO cost basis
 - **Unified Market Runtime:** One runtime for manual orders, replay, built-in agents, and headless simulation
-- **Built-In Agents:** Passive market maker, aggressive momentum trader, mean-reversion bot
+- **Built-In Agents:** Passive market maker, aggressive momentum trader, mean-reversion bot, Poisson-flow noise trader
+- **Regime Manager:** Auto-detected `calm`/`normal`/`stressed` regimes with explicit Poisson λ controls for limit, cancel, and marketable arrival rates, plus Pareto order-size dispersion for whale-vs-retail flow
 - **Live Server:** HTTP order entry + dual WebSocket market data (JSON and binary)
 - **React Dashboard:** Real-time ladder, trade tape, mid-price chart, order entry, P&L, simulation controls, system health
 - **Latency Telemetry:** Nanosecond-precision tracking from gateway entry through engine to publication
@@ -210,6 +211,15 @@ Simulation control example:
 }
 ```
 
+Force a specific market regime (`calm`, `normal`, or `stressed`):
+
+```json
+{
+  "action": "set_regime",
+  "volatility": "stressed"
+}
+```
+
 ## WebSocket API
 
 | Path | Format | Snapshot | Events |
@@ -248,8 +258,9 @@ Simulation control example:
 - clock mode and speed multiplier
 - current volatility preset
 - simulation timestamp
-- market-maker, momentum, and mean-reversion agent counts
+- market-maker, momentum, mean-reversion, and noise-trader agent counts
 - realized volatility and average spread summaries
+- current market regime (`calm`, `normal`, `stressed`) and the active Poisson arrival intensities (`limitLambda`, `cancelLambda`, `marketableLambda`), all expressed as expected events per millisecond
 
 ### Binary Protocol
 
@@ -289,6 +300,7 @@ All fields are little-endian (x86/x64 host order).
 | `--mm-count <n>` | | Passive market-maker count |
 | `--mom-count <n>` | | Aggressive momentum-agent count |
 | `--mr-count <n>` | | Mean-reversion-agent count |
+| `--noise-count <n>` | | Poisson-flow noise-trader count |
 | `--sim-duration-ms <n>` | | Bounded headless run duration in simulated milliseconds |
 | `--strategies` | `-s` | Route legacy strategy demos through the unified runtime |
 | `--backtest` | `-b` | Route legacy backtests through the unified runtime |

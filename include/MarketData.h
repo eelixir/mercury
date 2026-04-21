@@ -128,8 +128,13 @@ namespace Mercury {
         size_t marketMakerCount = 0;
         size_t momentumCount = 0;
         size_t meanReversionCount = 0;
+        size_t noiseTraderCount = 0;
         double realizedVolatilityBps = 0.0;
         double averageSpread = 0.0;
+        std::string regime;
+        double limitLambda = 0.0;
+        double cancelLambda = 0.0;
+        double marketableLambda = 0.0;
     };
 
     class MarketDataSink {

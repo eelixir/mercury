@@ -407,6 +407,118 @@ namespace Mercury {
             uint64_t lastAggressionTimestampMs_ = 0;
         };
 
+        // PoissonFlowAgent emits limit, cancel, and marketable intents driven by
+        // three independent Poisson processes whose rates come from the per-symbol
+        // RegimeManager. Order sizes are drawn from a Pareto distribution so the
+        // flow mixes "retail" noise with rare "whale" prints.
+        class PoissonFlowAgent final : public SimulationAgent {
+        public:
+            PoissonFlowAgent(SimulationVolatilityPreset preset, uint32_t seed)
+                : preset_(preset), rng_(seed) {}
+
+            std::string name() const override { return "PoissonFlow"; }
+
+            uint64_t wakeIntervalMs() const override {
+                // Short ticks so the discretised Poisson sampling stays close to
+                // the continuous-time ideal. Per-event emission is governed by
+                // the regime-scaled lambdas, not this cadence.
+                switch (preset_) {
+                    case SimulationVolatilityPreset::Low:  return 120;
+                    case SimulationVolatilityPreset::High: return 50;
+                    case SimulationVolatilityPreset::Normal:
+                    default:                               return 80;
+                }
+            }
+
+            std::vector<OrderIntent> onWake(const SimulationObservation& observation) override {
+                std::vector<OrderIntent> intents;
+                const uint64_t now = observation.environment.simulationTimestamp;
+                const uint64_t dt = lastWakeMs_ == 0 || now <= lastWakeMs_
+                    ? wakeIntervalMs()
+                    : now - lastWakeMs_;
+                lastWakeMs_ = now;
+
+                const auto intensity = observation.environment.intensity;
+                const auto dispersion = observation.environment.dispersion;
+                const int64_t reference = fallbackReferencePrice(observation);
+                if (reference <= 0) {
+                    return intents;
+                }
+
+                // 1. Cancels. Target the agent's own resting orders so the flow
+                //    composes cleanly with market-maker quoting behaviour.
+                const uint32_t cancelCount =
+                    RegimeManager::samplePoissonCount(intensity.cancelLambda, dt, rng_);
+                if (cancelCount > 0 && !observation.liveOrders.empty()) {
+                    std::uniform_int_distribution<size_t> pick(0, observation.liveOrders.size() - 1);
+                    const size_t n = std::min<size_t>(cancelCount, observation.liveOrders.size());
+                    for (size_t i = 0; i < n; ++i) {
+                        const auto& target = observation.liveOrders[pick(rng_)];
+                        intents.push_back(OrderIntent{
+                            OrderIntentKind::Cancel, target.side, 0, 0, TimeInForce::GTC, target.orderId
+                        });
+                    }
+                }
+
+                std::uniform_real_distribution<double> sideRoll(0.0, 1.0);
+
+                // 2. Marketable flow — IOC orders that cross the spread. Only
+                //    emit on a side where there is opposing liquidity.
+                const uint32_t mktCount =
+                    RegimeManager::samplePoissonCount(intensity.marketableLambda, dt, rng_);
+                for (uint32_t i = 0; i < mktCount; ++i) {
+                    const bool buy = sideRoll(rng_) < 0.5;
+                    if (buy && !observation.snapshot.bestAsk.has_value()) continue;
+                    if (!buy && !observation.snapshot.bestBid.has_value()) continue;
+                    const uint64_t qty = RegimeManager::sampleOrderSize(dispersion, rng_);
+                    intents.push_back(OrderIntent{
+                        OrderIntentKind::PlaceMarket,
+                        buy ? Side::Buy : Side::Sell,
+                        0,
+                        qty,
+                        TimeInForce::IOC
+                    });
+                }
+
+                // 3. Limit arrivals — resting orders placed near top-of-book
+                //    with a small random displacement into the book.
+                const uint32_t limitCount =
+                    RegimeManager::samplePoissonCount(intensity.limitLambda, dt, rng_);
+                for (uint32_t i = 0; i < limitCount; ++i) {
+                    const bool buy = sideRoll(rng_) < 0.5;
+                    std::uniform_int_distribution<int64_t> offsetDist(0, 4);
+                    const int64_t offset = offsetDist(rng_);
+                    int64_t price = reference;
+                    if (buy) {
+                        const int64_t anchor = observation.snapshot.bestBid.value_or(reference - 1);
+                        price = std::max<int64_t>(1, anchor - offset);
+                    } else {
+                        const int64_t anchor = observation.snapshot.bestAsk.value_or(reference + 1);
+                        price = std::max<int64_t>(1, anchor + offset);
+                    }
+                    const uint64_t qty = RegimeManager::sampleOrderSize(dispersion, rng_);
+                    intents.push_back(OrderIntent{
+                        OrderIntentKind::PlaceLimit,
+                        buy ? Side::Buy : Side::Sell,
+                        price,
+                        qty,
+                        TimeInForce::GTC
+                    });
+                }
+
+                return intents;
+            }
+
+            void reset() override {
+                lastWakeMs_ = 0;
+            }
+
+        private:
+            SimulationVolatilityPreset preset_;
+            std::mt19937 rng_;
+            uint64_t lastWakeMs_ = 0;
+        };
+
         template <typename T>
         void eraseByPointer(std::vector<T*>& items, T* item) {
             items.erase(std::remove(items.begin(), items.end(), item), items.end());
@@ -422,7 +534,9 @@ namespace Mercury {
             symbols_.push_back("SIM");
         }
         for (const auto& sym : symbols_) {
-            envs_[sym] = PerSymbolEnvironment{};
+            PerSymbolEnvironment env;
+            env.regime.setPreset(simulationConfig_.volatility);
+            envs_.emplace(sym, std::move(env));
         }
         createEngineService();
         rebuildAgents();
@@ -473,6 +587,16 @@ namespace Mercury {
                 auto agent = std::make_unique<MeanReversionAgent>(simulationConfig_.volatility);
                 const auto base = agent->wakeIntervalMs();
                 agents.push_back(AgentSlot{std::move(agent), symOffset + 3000 + static_cast<uint64_t>(i), schedule(base)});
+            }
+
+            for (size_t i = 0; i < simulationConfig_.noiseTraderCount; ++i) {
+                const uint32_t childSeed =
+                    static_cast<uint32_t>(simulationConfig_.seed) ^
+                    static_cast<uint32_t>((symIdx + 1) * 0x9E3779B1u) ^
+                    static_cast<uint32_t>((i + 1) * 0x85EBCA77u);
+                auto agent = std::make_unique<PoissonFlowAgent>(simulationConfig_.volatility, childSeed);
+                const auto base = agent->wakeIntervalMs();
+                agents.push_back(AgentSlot{std::move(agent), symOffset + 4000 + static_cast<uint64_t>(i), schedule(base)});
             }
 
             for (const auto& descriptor : customAgentFactories_) {
@@ -577,6 +701,7 @@ namespace Mercury {
         state.marketMakerCount = simulationConfig_.marketMakerCount;
         state.momentumCount = simulationConfig_.momentumCount;
         state.meanReversionCount = simulationConfig_.meanReversionCount;
+        state.noiseTraderCount = simulationConfig_.noiseTraderCount;
 
         {
             std::lock_guard<std::mutex> lock(stateMutex_);
@@ -586,6 +711,11 @@ namespace Mercury {
             if (envIt != envs_.end()) {
                 state.realizedVolatilityBps = envIt->second.realizedVolatilityBps;
                 state.averageSpread = envIt->second.averageSpread;
+                const auto intensity = envIt->second.regime.intensity();
+                state.regime = marketRegimeToString(envIt->second.regime.regime());
+                state.limitLambda = intensity.limitLambda;
+                state.cancelLambda = intensity.cancelLambda;
+                state.marketableLambda = intensity.marketableLambda;
             }
         }
 
@@ -640,7 +770,24 @@ namespace Mercury {
         }
         if (control.action == "set_volatility") {
             simulationConfig_.volatility = simulationVolatilityFromString(control.volatility);
+            {
+                std::lock_guard<std::mutex> lock(stateMutex_);
+                for (auto& [sym, env] : envs_) {
+                    env.regime.setPreset(simulationConfig_.volatility);
+                }
+            }
             rebuildAgents();
+            publishSimulationState(true);
+            return true;
+        }
+        if (control.action == "set_regime") {
+            const auto regime = marketRegimeFromString(control.volatility);
+            {
+                std::lock_guard<std::mutex> lock(stateMutex_);
+                for (auto& [sym, env] : envs_) {
+                    env.regime.forceRegime(regime);
+                }
+            }
             publishSimulationState(true);
             return true;
         }
@@ -828,6 +975,9 @@ namespace Mercury {
             observation.environment.averageSpread = env.averageSpread;
             observation.environment.volatilityPreset = simulationVolatilityToString(simulationConfig_.volatility);
             observation.environment.simulationTimestamp = simulationTimestampMs_;
+            observation.environment.regime = env.regime.regime();
+            observation.environment.intensity = env.regime.intensity();
+            observation.environment.dispersion = env.regime.dispersion();
         }
 
         if (observation.stats.timestamp == 0) {
@@ -965,6 +1115,11 @@ namespace Mercury {
             env.momentumDirection = uniform(rng_) < 0.5 ? -1 : 1;
             env.burstRemainingMs = params.burstDurationMs;
         }
+
+        env.regime.observe(env.realizedVolatilityBps,
+                           env.momentumBurst,
+                           env.averageSpread,
+                           stepMs);
     }
 
     void MarketRuntime::maybeWakeAgents() {
@@ -1030,8 +1185,14 @@ namespace Mercury {
             event.marketMakerCount = simulationConfig_.marketMakerCount;
             event.momentumCount = simulationConfig_.momentumCount;
             event.meanReversionCount = simulationConfig_.meanReversionCount;
+            event.noiseTraderCount = simulationConfig_.noiseTraderCount;
             event.realizedVolatilityBps = env.realizedVolatilityBps;
             event.averageSpread = env.averageSpread;
+            const auto intensity = env.regime.intensity();
+            event.regime = marketRegimeToString(env.regime.regime());
+            event.limitLambda = intensity.limitLambda;
+            event.cancelLambda = intensity.cancelLambda;
+            event.marketableLambda = intensity.marketableLambda;
 
             fanout([&](MarketDataSink* sink) { sink->onSimulationState(event); });
         }

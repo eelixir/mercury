@@ -173,6 +173,7 @@ std::vector<std::string> collectPositionalArgs(int argc, char* argv[]) {
             arg == "--sim-speed" || arg == "--sim-seed" ||
             arg == "--sim-volatility" || arg == "--mm-count" ||
             arg == "--mom-count" || arg == "--mr-count" ||
+            arg == "--noise-count" ||
             arg == "--sim-duration-ms" || arg == "--replay-loop-pause" ||
             arg == "--port" || arg == "--host" || arg == "--symbol") {
             if (i + 1 < argc) {
@@ -330,6 +331,8 @@ int main(int argc, char* argv[]) {
             serverOptions.simulation.momentumCount = static_cast<size_t>(std::stoull(argv[++i]));
         } else if (arg == "--mr-count" && i + 1 < argc) {
             serverOptions.simulation.meanReversionCount = static_cast<size_t>(std::stoull(argv[++i]));
+        } else if (arg == "--noise-count" && i + 1 < argc) {
+            serverOptions.simulation.noiseTraderCount = static_cast<size_t>(std::stoull(argv[++i]));
         } else if (arg == "--sim-duration-ms" && i + 1 < argc) {
             serverOptions.simulation.headlessDurationMs = static_cast<uint64_t>(std::stoull(argv[++i]));
         } else if (arg == "--replay" && i + 1 < argc) {
@@ -396,6 +399,7 @@ int main(int argc, char* argv[]) {
                        arg == "--sim" || arg == "--headless" || arg == "--sim-speed" ||
                        arg == "--sim-seed" || arg == "--sim-volatility" ||
                        arg == "--mm-count" || arg == "--mom-count" || arg == "--mr-count" ||
+                       arg == "--noise-count" ||
                        arg == "--sim-duration-ms" ||
                        arg == "--replay-loop" || arg == "--replay-loop-pause" ||
                        arg == "--port" || arg == "--host" || arg == "--symbol") {
@@ -403,6 +407,7 @@ int main(int argc, char* argv[]) {
                      arg == "--sim-speed" || arg == "--sim-seed" ||
                      arg == "--sim-volatility" || arg == "--mm-count" ||
                      arg == "--mom-count" || arg == "--mr-count" ||
+                     arg == "--noise-count" ||
                      arg == "--sim-duration-ms" ||
                      arg == "--replay-loop-pause" || arg == "--port" ||
                      arg == "--host" || arg == "--symbol") && i + 1 < argc) {
@@ -802,6 +807,7 @@ int main(int argc, char* argv[]) {
         std::cout << "  --mm-count <n>     Passive market maker count\n";
         std::cout << "  --mom-count <n>    Aggressive momentum trader count\n";
         std::cout << "  --mr-count <n>     Mean-reversion bot count\n";
+        std::cout << "  --noise-count <n>  Poisson-flow noise trader count\n";
         std::cout << "  --sim-duration-ms <ms>  Headless simulation duration (default 30000)\n";
         std::cout << "  --replay <file>    Feed a replay CSV into server mode\n";
         std::cout << "  --replay-speed <x> Replay speed multiplier for server mode\n";

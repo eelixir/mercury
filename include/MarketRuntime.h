@@ -3,6 +3,7 @@
 #include "EngineService.h"
 #include "MarketData.h"
 #include "PnLTracker.h"
+#include "RegimeManager.h"
 
 #include <atomic>
 #include <cstdint>
@@ -62,6 +63,7 @@ namespace Mercury {
         size_t marketMakerCount = 2;
         size_t momentumCount = 2;
         size_t meanReversionCount = 2;
+        size_t noiseTraderCount = 1;
         uint64_t stepMs = 50;
         uint64_t publishIntervalMs = 250;
         uint64_t headlessDurationMs = 30000;
@@ -75,6 +77,9 @@ namespace Mercury {
         double averageSpread = 0.0;
         std::string volatilityPreset;
         uint64_t simulationTimestamp = 0;
+        MarketRegime regime = MarketRegime::Normal;
+        ArrivalIntensity intensity{};
+        OrderSizeDispersion dispersion{};
     };
 
     struct SimulatedOrderInfo {
@@ -152,8 +157,13 @@ namespace Mercury {
         size_t marketMakerCount = 0;
         size_t momentumCount = 0;
         size_t meanReversionCount = 0;
+        size_t noiseTraderCount = 0;
         double realizedVolatilityBps = 0.0;
         double averageSpread = 0.0;
+        std::string regime = "normal";
+        double limitLambda = 0.0;
+        double cancelLambda = 0.0;
+        double marketableLambda = 0.0;
     };
 
     struct HeadlessSummary {
@@ -253,6 +263,7 @@ namespace Mercury {
             std::unordered_map<uint64_t, LiveOrderRecord> liveOrdersById;
             std::unordered_map<uint64_t, PnLEvent> pnlByClient;
             uint64_t lastSimStatePublishMs = 0;
+            RegimeManager regime{SimulationVolatilityPreset::Normal};
         };
 
         std::vector<std::string> symbols_;
