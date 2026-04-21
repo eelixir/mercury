@@ -15,6 +15,7 @@ describe('market data store', () => {
       chartPoints: [],
       activeClientId: 1,
       lastOrderResponse: null,
+      submittedOrderIds: new Set<number>(),
     })
   })
 

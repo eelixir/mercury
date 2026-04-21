@@ -96,6 +96,7 @@ function Field({
 export function OrderEntryForm() {
   const setLastOrderResponse = useMarketDataStore((state) => state.setLastOrderResponse)
   const setActiveClientId = useMarketDataStore((state) => state.setActiveClientId)
+  const trackOrderId = useMarketDataStore((state) => state.trackOrderId)
   const lastResponse = useMarketDataStore((state) => state.lastOrderResponse)
 
   const [orderType, setOrderType] = useState<OrderType>('limit')
@@ -155,6 +156,8 @@ export function OrderEntryForm() {
               try {
                 const response = await submitOrder(request)
                 setLastOrderResponse(response)
+                if (response.submittedOrderId > 0) trackOrderId(response.submittedOrderId)
+                if (response.orderId > 0) trackOrderId(response.orderId)
               } catch (err) {
                 setLastOrderResponse({
                   submittedOrderId: 0,

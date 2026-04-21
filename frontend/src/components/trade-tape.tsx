@@ -1,10 +1,12 @@
 import { useDeferredValue, useMemo } from 'react'
 import { formatClock, formatPrice } from '../lib/format'
 import { useMarketDataStore } from '../store/market-data-store'
+import { Badge } from './ui/badge'
 import { Card, CardBody, CardHeader } from './ui/card'
 
 export function TradeTape() {
   const trades = useDeferredValue(useMarketDataStore((state) => state.trades))
+  const submittedOrderIds = useMarketDataStore((state) => state.submittedOrderIds)
 
   const decoratedTrades = useMemo(() => {
     // `trades` is newest-first. Compare each trade's price against the next
@@ -18,9 +20,11 @@ export function TradeTape() {
           : trade.price < older.price
             ? 'down'
             : 'flat'
-      return { trade, direction }
+      const isSelf =
+        submittedOrderIds.has(trade.buyOrderId) || submittedOrderIds.has(trade.sellOrderId)
+      return { trade, direction, isSelf }
     })
-  }, [trades])
+  }, [trades, submittedOrderIds])
 
   const lastPrice = trades[0]?.price ?? null
 
@@ -52,7 +56,7 @@ export function TradeTape() {
                 Waiting for first trade
               </div>
             ) : (
-              decoratedTrades.map(({ trade, direction }) => {
+              decoratedTrades.map(({ trade, direction, isSelf }) => {
                 const priceClass =
                   direction === 'up'
                     ? 'text-[color:var(--color-buy)]'
@@ -63,10 +67,15 @@ export function TradeTape() {
                 return (
                   <div
                     key={trade.tradeId}
-                    className="grid grid-cols-[0.9fr_1fr_1fr_0.8fr] items-center px-2 py-[2px] text-[12px] hover:bg-[color:var(--color-bg-row-hover)]"
+                    className={`grid grid-cols-[0.9fr_1fr_1fr_0.8fr] items-center px-2 py-[2px] text-[12px] hover:bg-[color:var(--color-bg-row-hover)] ${
+                      isSelf
+                        ? 'border-l-2 border-l-[color:var(--color-accent)] bg-[color:var(--color-accent)]/[0.06]'
+                        : ''
+                    }`}
                   >
-                    <span className="num text-[color:var(--color-text-muted)]">
+                    <span className="num text-[color:var(--color-text-muted)] flex items-center gap-1">
                       {formatClock(trade.timestamp)}
+                      {isSelf ? <Badge tone="live">You</Badge> : null}
                     </span>
                     <span className={`num text-right ${priceClass}`}>
                       <span className="mr-1 text-[9px] opacity-70">{arrow}</span>

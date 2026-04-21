@@ -178,7 +178,11 @@ add_executable(mercury
 )
 
 if(MERCURY_BUILD_SERVER)
-    target_sources(mercury PRIVATE src/ServerApp.cpp)
+    target_sources(mercury PRIVATE
+        src/ServerApp.cpp
+        src/MarketDataPublisher.cpp
+        src/OrderEntryGateway.cpp
+    )
 endif()
 
 # Include the src and include directories so headers can be found easily
@@ -221,8 +225,11 @@ set(MERCURY_HEADERS
     include/Backtester.h
     include/BacktestDemo.h
     include/MarketData.h
+    include/MarketDataPublisher.h
     include/EngineService.h
     include/ServerApp.h
+    include/ServerHelpers.h
+    include/OrderEntryGateway.h
 )
 target_sources(mercury_lib PRIVATE ${MERCURY_HEADERS})
 

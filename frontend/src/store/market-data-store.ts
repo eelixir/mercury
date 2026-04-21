@@ -29,9 +29,11 @@ interface MarketDataState {
   chartPoints: ChartPoint[]
   activeClientId: number
   lastOrderResponse: OrderResponse | null
+  submittedOrderIds: Set<number>
   setConnectionState: (state: ConnectionState) => void
   setActiveClientId: (clientId: number) => void
   setLastOrderResponse: (response: OrderResponse | null) => void
+  trackOrderId: (orderId: number) => void
   applyEnvelope: (envelope: MarketEnvelope) => boolean
 }
 
@@ -57,9 +59,18 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
   chartPoints: [],
   activeClientId: 1,
   lastOrderResponse: null,
+  submittedOrderIds: new Set<number>(),
   setConnectionState: (connectionState) => set({ connectionState }),
   setActiveClientId: (activeClientId) => set({ activeClientId }),
   setLastOrderResponse: (lastOrderResponse) => set({ lastOrderResponse }),
+  trackOrderId: (orderId) => {
+    if (orderId <= 0) return
+    set((state) => {
+      const next = new Set(state.submittedOrderIds)
+      next.add(orderId)
+      return { submittedOrderIds: next }
+    })
+  },
   applyEnvelope: (envelope) => {
     const currentSequence = get().sequence
 
