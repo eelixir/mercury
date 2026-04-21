@@ -57,7 +57,7 @@ Do not assume an older README claim still matches the build. Verify it in code.
 - Market-data snapshots and deltas are produced on the engine thread after mutation.
 - WebSocket publishing is deferred onto the uWebSockets loop.
 - Telemetry (latency, MPS) is computed on the engine thread using out-of-band state, not by modifying `Order`.
-- Symbol support is API-level only in v1. Do not push symbol into core order types unless the task explicitly requires that broader refactor.
+- The system supports multiple symbols via an EngineService registry. The core `Order` and `OrderBook` remain single-instrument primitives. Do not push symbol into core order types unless explicitly required.
 - Preserve the current order-book storage split unless the task explicitly justifies changing it: `absl::btree_map` price ladders, Abseil-backed `HashMap` lookups, and intrusive FIFO queues within each level.
 - Volatility presets should change participation, spread, and short-term noise without causing runaway price drift over a few seconds.
 
@@ -123,7 +123,7 @@ npm run build
 Backend:
 
 ```powershell
-.\build\mercury.exe --server --sim --host 127.0.0.1 --port 9001 --symbol SIM
+.\build\mercury.exe --server --sim --host 127.0.0.1 --port 9001 --symbol SIM,AAPL,GOOG
 ```
 
 Frontend:

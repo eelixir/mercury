@@ -29,6 +29,7 @@ namespace Mercury {
     struct BinaryBookDelta {
         BinaryHeader header;
         uint64_t sequence;
+        char     symbol[8];
         uint8_t  side;            // 0 = buy, 1 = sell
         int64_t  price;
         uint64_t quantity;
@@ -41,6 +42,7 @@ namespace Mercury {
     struct BinaryTradeEvent {
         BinaryHeader header;
         uint64_t sequence;
+        char     symbol[8];
         uint64_t tradeId;
         int64_t  price;
         uint64_t quantity;
@@ -61,6 +63,8 @@ namespace Mercury {
         msg.header.reserved = 0;
         msg.header.length = static_cast<uint16_t>(sizeof(BinaryBookDelta));
         msg.sequence = delta.sequence;
+        std::strncpy(msg.symbol, delta.symbol.c_str(), sizeof(msg.symbol) - 1);
+        msg.symbol[sizeof(msg.symbol) - 1] = '\0';
         msg.side = delta.side == Side::Buy ? 0 : 1;
         msg.price = delta.price;
         msg.quantity = delta.quantity;
@@ -79,6 +83,8 @@ namespace Mercury {
         msg.header.reserved = 0;
         msg.header.length = static_cast<uint16_t>(sizeof(BinaryTradeEvent));
         msg.sequence = trade.sequence;
+        std::strncpy(msg.symbol, trade.symbol.c_str(), sizeof(msg.symbol) - 1);
+        msg.symbol[sizeof(msg.symbol) - 1] = '\0';
         msg.tradeId = trade.tradeId;
         msg.price = trade.price;
         msg.quantity = trade.quantity;

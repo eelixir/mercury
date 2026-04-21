@@ -7,8 +7,11 @@
 
 namespace Mercury {
 
-    EngineService::EngineService(std::string symbol)
-        : symbol_(std::move(symbol)) {
+    EngineService::EngineService(std::vector<std::string> symbols)
+        : symbols_(std::move(symbols)) {
+        for (const auto& sym : symbols_) {
+            books_.emplace(sym, std::make_unique<InstrumentBook>(sym));
+        }
     }
 
     EngineService::~EngineService() {
@@ -25,24 +28,30 @@ namespace Mercury {
         stopRequested_.store(false);
         currentSequence_ = 0;
 
-        engine_.setBookMutationCallback([this](const BookMutation& mutation) {
-            handleBookMutation(mutation);
-        });
-
-        engine_.setTradeCallback([this](const Trade& trade) {
-            handleTrade(trade);
-        });
-
-        engine_.setExecutionCallback([this](const ExecutionResult& result) {
-            handleExecution(result);
-        });
-
-        pnlTracker_.setPnLCallback([this](const PnLSnapshot& snapshot) {
-            handlePnL(snapshot);
-        });
+        for (auto& [sym, book] : books_) {
+            wireBookCallbacks(*book);
+        }
 
         engineThread_ = std::thread([this]() {
             engineLoop();
+        });
+    }
+
+    void EngineService::wireBookCallbacks(InstrumentBook& book) {
+        book.engine.setBookMutationCallback([this](const BookMutation& mutation) {
+            handleBookMutation(mutation);
+        });
+
+        book.engine.setTradeCallback([this](const Trade& trade) {
+            handleTrade(trade);
+        });
+
+        book.engine.setExecutionCallback([this](const ExecutionResult& result) {
+            handleExecution(result);
+        });
+
+        book.pnlTracker.setPnLCallback([this](const PnLSnapshot& snapshot) {
+            handlePnL(snapshot);
         });
     }
 
@@ -71,13 +80,21 @@ namespace Mercury {
         return nextOrderId_.fetch_add(1);
     }
 
-    ExecutionResult EngineService::submitOrder(Order order) {
-        return submitOrder(std::move(order), 0);
+    bool EngineService::hasSymbol(const std::string& symbol) const {
+        return books_.find(symbol) != books_.end();
     }
 
-    ExecutionResult EngineService::submitOrder(Order order, uint64_t entryTimestampNs) {
+    ExecutionResult EngineService::submitOrder(const std::string& symbol, Order order) {
+        return submitOrder(symbol, std::move(order), 0);
+    }
+
+    ExecutionResult EngineService::submitOrder(const std::string& symbol, Order order, uint64_t entryTimestampNs) {
         if (!running_.load()) {
             start();
+        }
+
+        if (!hasSymbol(symbol)) {
+            return ExecutionResult::makeRejection(order.id, RejectReason::InvalidSymbol);
         }
 
         if ((order.orderType == OrderType::Limit || order.orderType == OrderType::Market) && order.id == 0) {
@@ -86,23 +103,32 @@ namespace Mercury {
             order.id = allocateOrderId();
         }
 
-        return invoke([this, order, entryTimestampNs]() mutable {
+        return invoke([this, symbol, order, entryTimestampNs]() mutable {
+            activeSymbol_ = symbol;
             entryTimestampNs_ = entryTimestampNs;
-            auto result = engine_.submitOrder(order);
+            auto& book = *books_.at(symbol);
+            auto result = book.engine.submitOrder(order);
             entryTimestampNs_ = 0;
-            publishStats();
+            publishStats(symbol);
+            activeSymbol_.clear();
             return result;
         });
     }
 
-    L2Snapshot EngineService::getSnapshot(size_t depth) {
+    L2Snapshot EngineService::getSnapshot(const std::string& symbol, size_t depth) {
         if (!running_.load()) {
             start();
         }
 
+        if (!hasSymbol(symbol)) {
+            L2Snapshot empty;
+            empty.symbol = symbol;
+            return empty;
+        }
+
         depth = std::min<size_t>(100, std::max<size_t>(1, depth));
-        return invoke([this, depth]() {
-            return buildSnapshot(depth);
+        return invoke([this, symbol, depth]() {
+            return buildSnapshot(symbol, depth);
         });
     }
 
@@ -115,15 +141,19 @@ namespace Mercury {
             EngineState state;
             state.running = running_.load();
             state.replayActive = replayActive_.load();
-            state.symbol = symbol_;
+            state.symbols = symbols_;
             state.sequence = currentSequence_;
             state.nextOrderId = nextOrderId_.load();
-            state.tradeCount = engine_.getTradeCount();
-            state.totalVolume = engine_.getTotalVolume();
-            state.orderCount = engine_.getOrderBook().getOrderCount();
-            state.bidLevels = engine_.getOrderBook().getBidLevelCount();
-            state.askLevels = engine_.getOrderBook().getAskLevelCount();
-            state.clientCount = pnlTracker_.getClientCount();
+
+            // Aggregate across all books.
+            for (const auto& [sym, book] : books_) {
+                state.tradeCount += book->engine.getTradeCount();
+                state.totalVolume += book->engine.getTotalVolume();
+                state.orderCount += book->engine.getOrderBook().getOrderCount();
+                state.bidLevels += book->engine.getOrderBook().getBidLevelCount();
+                state.askLevels += book->engine.getOrderBook().getAskLevelCount();
+                state.clientCount += book->pnlTracker.getClientCount();
+            }
             return state;
         });
     }
@@ -158,8 +188,11 @@ namespace Mercury {
             replayThread_.join();
         }
 
+        // Replay routes all orders to the first symbol.
+        const std::string replaySymbol = symbols_.empty() ? "SIM" : symbols_.front();
+
         replayThread_ = std::thread(
-            [this, orders = std::move(orders), speed, loop, loopPauseMs]() mutable {
+            [this, orders = std::move(orders), speed, loop, loopPauseMs, replaySymbol]() mutable {
                 auto sleepInterruptible = [this](uint64_t millis) {
                     const uint64_t step = 50;
                     uint64_t remaining = millis;
@@ -176,7 +209,7 @@ namespace Mercury {
                     for (size_t i = 0; i < orders.size() && replayActive_.load(); ++i) {
                         Order o = orders[i];
                         o.id += loopOffset;
-                        submitOrder(o);
+                        submitOrder(replaySymbol, o);
 
                         if (i + 1 >= orders.size()) {
                             continue;
@@ -249,7 +282,7 @@ namespace Mercury {
     void EngineService::handleBookMutation(const BookMutation& mutation) {
         BookDelta delta;
         delta.sequence = nextSequence();
-        delta.symbol = symbol_;
+        delta.symbol = activeSymbol_;
         delta.side = mutation.side;
         delta.price = mutation.price;
         delta.quantity = mutation.quantity;
@@ -268,11 +301,12 @@ namespace Mercury {
     }
 
     void EngineService::handleTrade(const Trade& trade) {
-        pnlTracker_.onTradeExecuted(trade, trade.buyClientId, trade.sellClientId, trade.price);
+        auto& book = *books_.at(activeSymbol_);
+        book.pnlTracker.onTradeExecuted(trade, trade.buyClientId, trade.sellClientId, trade.price);
 
         TradeEvent event;
         event.sequence = nextSequence();
-        event.symbol = symbol_;
+        event.symbol = activeSymbol_;
         event.tradeId = trade.tradeId;
         event.price = trade.price;
         event.quantity = trade.quantity;
@@ -295,7 +329,7 @@ namespace Mercury {
     void EngineService::handlePnL(const PnLSnapshot& snapshot) {
         PnLEvent event;
         event.sequence = nextSequence();
-        event.symbol = symbol_;
+        event.symbol = activeSymbol_;
         event.clientId = snapshot.clientId;
         event.netPosition = snapshot.netPosition;
         event.realizedPnL = snapshot.realizedPnL;
@@ -313,7 +347,7 @@ namespace Mercury {
     void EngineService::handleExecution(const ExecutionResult& result) {
         ExecutionEvent event;
         event.sequence = nextSequence();
-        event.symbol = symbol_;
+        event.symbol = activeSymbol_;
         event.orderId = result.orderId;
         event.status = result.status;
         event.rejectReason = result.rejectReason;
@@ -328,14 +362,19 @@ namespace Mercury {
         }
     }
 
-    void EngineService::publishStats() {
-        const auto& book = engine_.getOrderBook();
+    void EngineService::publishStats(const std::string& symbol) {
+        auto it = books_.find(symbol);
+        if (it == books_.end()) {
+            return;
+        }
+
+        const auto& book = it->second->engine.getOrderBook();
 
         StatsEvent stats;
         stats.sequence = nextSequence();
-        stats.symbol = symbol_;
-        stats.tradeCount = engine_.getTradeCount();
-        stats.totalVolume = engine_.getTotalVolume();
+        stats.symbol = symbol;
+        stats.tradeCount = it->second->engine.getTradeCount();
+        stats.totalVolume = it->second->engine.getTotalVolume();
         stats.orderCount = book.getOrderCount();
         stats.bidLevels = book.getBidLevelCount();
         stats.askLevels = book.getAskLevelCount();
@@ -363,12 +402,19 @@ namespace Mercury {
         }
     }
 
-    L2Snapshot EngineService::buildSnapshot(size_t depth) const {
-        const auto& book = engine_.getOrderBook();
+    L2Snapshot EngineService::buildSnapshot(const std::string& symbol, size_t depth) const {
+        auto it = books_.find(symbol);
+        if (it == books_.end()) {
+            L2Snapshot empty;
+            empty.symbol = symbol;
+            return empty;
+        }
+
+        const auto& book = it->second->engine.getOrderBook();
 
         L2Snapshot snapshot;
         snapshot.sequence = currentSequence_;
-        snapshot.symbol = symbol_;
+        snapshot.symbol = symbol;
         snapshot.depth = depth;
         snapshot.bids = book.getTopLevels(Side::Buy, depth);
         snapshot.asks = book.getTopLevels(Side::Sell, depth);

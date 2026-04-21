@@ -15,7 +15,7 @@ namespace Mercury {
         double replaySpeed = 1.0;
         bool replayLoop = false;
         uint64_t replayLoopPauseMs = 1000;
-        std::string symbol = "SIM";
+        std::vector<std::string> symbols = {"SIM"};
         SimulationConfig simulation;
     };
 

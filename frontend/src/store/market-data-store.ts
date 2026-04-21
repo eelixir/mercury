@@ -81,6 +81,10 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
   applyEnvelope: (envelope) => {
     const currentSequence = get().sequence
 
+    if (envelope.symbol && envelope.symbol !== get().symbol) {
+      return false
+    }
+
     if (envelope.type !== 'snapshot' && envelope.type !== 'sim_state' && currentSequence !== 0 && envelope.sequence > currentSequence + 1) {
       return true
     }

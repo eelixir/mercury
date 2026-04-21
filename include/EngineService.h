@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CSVParser.h"
+#include "InstrumentBook.h"
 #include "MarketData.h"
 #include "MatchingEngine.h"
 #include "PnLTracker.h"
@@ -9,18 +10,21 @@
 #include <cstdint>
 #include <functional>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <queue>
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <unordered_map>
+#include <vector>
 
 namespace Mercury {
 
     struct EngineState {
         bool running = false;
         bool replayActive = false;
-        std::string symbol;
+        std::vector<std::string> symbols;
         uint64_t sequence = 0;
         uint64_t nextOrderId = 1;
         uint64_t tradeCount = 0;
@@ -33,7 +37,7 @@ namespace Mercury {
 
     class EngineService {
     public:
-        explicit EngineService(std::string symbol = "SIM");
+        explicit EngineService(std::vector<std::string> symbols = {"SIM"});
         ~EngineService();
 
         EngineService(const EngineService&) = delete;
@@ -48,24 +52,25 @@ namespace Mercury {
         void setMarketDataSink(MarketDataSink* sink);
 
         uint64_t allocateOrderId();
-        ExecutionResult submitOrder(Order order);
-        ExecutionResult submitOrder(Order order, uint64_t entryTimestampNs);
-        L2Snapshot getSnapshot(size_t depth = 20);
+        ExecutionResult submitOrder(const std::string& symbol, Order order);
+        ExecutionResult submitOrder(const std::string& symbol, Order order, uint64_t entryTimestampNs);
+        L2Snapshot getSnapshot(const std::string& symbol, size_t depth = 20);
         EngineState getState();
 
         bool startReplay(const std::string& inputFile, double speed = 1.0,
                          bool loop = false, uint64_t loopPauseMs = 1000);
         void stopReplay();
 
-        const std::string& getSymbol() const { return symbol_; }
+        const std::vector<std::string>& getSymbols() const { return symbols_; }
+        bool hasSymbol(const std::string& symbol) const;
 
     private:
         using Task = std::function<void()>;
 
-        MatchingEngine engine_;
-        PnLTracker pnlTracker_;
+        std::vector<std::string> symbols_;
+        std::unordered_map<std::string, std::unique_ptr<InstrumentBook>> books_;
+
         CSVParser csvParser_;
-        std::string symbol_;
 
         std::atomic<bool> running_{false};
         std::atomic<bool> stopRequested_{false};
@@ -95,18 +100,23 @@ namespace Mercury {
         uint64_t lastMessageCount_ = 0;
         uint64_t currentMps_ = 0;
 
+        // Tracks which book is currently being mutated on the engine thread,
+        // so callbacks can identify the active symbol without extra args.
+        std::string activeSymbol_;
+
         void engineLoop();
         void enqueue(Task task);
 
         template <typename F>
         auto invoke(F&& fn) -> std::invoke_result_t<F>;
 
+        void wireBookCallbacks(InstrumentBook& book);
         void handleBookMutation(const BookMutation& mutation);
         void handleTrade(const Trade& trade);
         void handlePnL(const PnLSnapshot& snapshot);
         void handleExecution(const ExecutionResult& result);
-        void publishStats();
-        L2Snapshot buildSnapshot(size_t depth) const;
+        void publishStats(const std::string& symbol);
+        L2Snapshot buildSnapshot(const std::string& symbol, size_t depth) const;
         uint64_t nextSequence() { return ++currentSequence_; }
         static uint64_t wallTimestampMillis();
         static uint64_t steadyNowNs();

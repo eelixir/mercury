@@ -43,15 +43,16 @@ namespace Mercury {
                                           const std::string& body) {
         try {
             const auto parsed = json::parse(body);
-            Order order = helpers::parseOrderFromJson(parsed, runtime_);
+            const std::string defaultSymbol = runtime_.getSymbols().empty() ? "SIM" : runtime_.getSymbols().front();
+            auto req = helpers::parseOrderRequestFromJson(parsed, runtime_, defaultSymbol);
 
             auto entryNs = static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     std::chrono::steady_clock::now().time_since_epoch()).count());
 
-            ExecutionResult result = runtime_.submitOrder(order, entryNs);
+            ExecutionResult result = runtime_.submitOrder(req.symbol, req.order, entryNs);
             helpers::writeJson(res, "200 OK",
-                               helpers::executionResultToJson(order, result));
+                               helpers::executionResultToJson(req.order, result));
         } catch (const std::exception& ex) {
             helpers::writeJson(res, "400 Bad Request", json{
                 {"error", "invalid_request"},

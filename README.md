@@ -155,7 +155,7 @@ The backend pulls third-party dependencies with CMake `FetchContent`, including 
 
 Terminal 1 — backend:
 ```powershell
-.\build\mercury.exe --server --sim --host 127.0.0.1 --port 9001 --symbol SIM
+.\build\mercury.exe --server --sim --host 127.0.0.1 --port 9001 --symbol SIM,AAPL,GOOG
 ```
 
 Terminal 2 — frontend:
@@ -257,8 +257,8 @@ Messages on `/ws/market/bin` use packed structs from `include/BinaryProtocol.h`:
 
 | Struct | Size | Header Type |
 |--------|------|-------------|
-| `BinaryBookDelta` | 53 bytes | `1` |
-| `BinaryTradeEvent` | 77 bytes | `2` |
+| `BinaryBookDelta` | 61 bytes | `1` |
+| `BinaryTradeEvent` | 85 bytes | `2` |
 
 All fields are little-endian (x86/x64 host order).
 
@@ -280,7 +280,7 @@ All fields are little-endian (x86/x64 host order).
 | `--headless` | | Run the same simulation runtime without the browser server |
 | `--host <addr>` | | Bind address (default `127.0.0.1`) |
 | `--port <port>` | `-p` | Listen port (default `9001`) |
-| `--symbol <name>` | | Symbol name (default `SIM`) |
+| `--symbol <name>` | | Comma-separated list of symbols (default `SIM`) |
 | `--replay <file>` | | CSV replay file |
 | `--replay-speed <x>` | | Replay speed multiplier |
 | `--sim-speed <x>` | | Simulation clock speed multiplier |
@@ -341,7 +341,7 @@ npm run build
 ## Current V1 Boundaries
 
 - Localhost only, no auth
-- Single book in core engine, symbol at API layer only
+- Single book in core engine, but multi-symbol supported via an EngineService registry
 - JSON primary transport, binary secondary for throughput-sensitive consumers
 - Browser writes over HTTP, market data over WebSocket
 - Browser is a thin operator client; the market can stay active without manual orders

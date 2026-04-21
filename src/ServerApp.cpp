@@ -34,7 +34,7 @@ namespace Mercury {
     }
 
     int runServer(const ServerOptions& options) {
-        MarketRuntime runtime(options.symbol, options.simulation);
+        MarketRuntime runtime(options.symbols, options.simulation);
         MarketDataPublisher publisher;
         OrderEntryGateway gateway(runtime);
 
@@ -52,28 +52,32 @@ namespace Mercury {
         bool listening = false;
 
         auto sendSnapshot = [&runtime](auto* ws, size_t depth) {
-            auto snapshot = runtime.getSnapshot(depth);
-            ws->send(snapshotEnvelope(snapshot), uWS::OpCode::TEXT);
+            for (const auto& sym : runtime.getSymbols()) {
+                auto snapshot = runtime.getSnapshot(sym, depth);
+                ws->send(snapshotEnvelope(snapshot), uWS::OpCode::TEXT);
+            }
         };
 
         auto sendSimulationState = [&runtime](auto* ws) {
             auto state = runtime.getState();
-            SimulationStateEvent event;
-            event.sequence = state.sequence;
-            event.symbol = state.symbol;
-            event.enabled = state.simulationEnabled;
-            event.running = state.simulationRunning;
-            event.paused = state.simulationPaused;
-            event.clockMode = state.clockMode;
-            event.speed = state.simulationSpeed;
-            event.volatility = state.volatilityPreset;
-            event.simulationTimestamp = state.simulationTimestamp;
-            event.marketMakerCount = state.marketMakerCount;
-            event.momentumCount = state.momentumCount;
-            event.meanReversionCount = state.meanReversionCount;
-            event.realizedVolatilityBps = state.realizedVolatilityBps;
-            event.averageSpread = state.averageSpread;
-            ws->send(simStateEnvelope(event), uWS::OpCode::TEXT);
+            for (const auto& sym : runtime.getSymbols()) {
+                SimulationStateEvent event;
+                event.sequence = state.sequence;
+                event.symbol = sym; // Use the specific symbol
+                event.enabled = state.simulationEnabled;
+                event.running = state.simulationRunning;
+                event.paused = state.simulationPaused;
+                event.clockMode = state.clockMode;
+                event.speed = state.simulationSpeed;
+                event.volatility = state.volatilityPreset;
+                event.simulationTimestamp = state.simulationTimestamp;
+                event.marketMakerCount = state.marketMakerCount;
+                event.momentumCount = state.momentumCount;
+                event.meanReversionCount = state.meanReversionCount;
+                event.realizedVolatilityBps = state.realizedVolatilityBps; // primary symbol stats for initial connect
+                event.averageSpread = state.averageSpread;
+                ws->send(simStateEnvelope(event), uWS::OpCode::TEXT);
+            }
         };
 
         app.options("/*", [](auto* res, auto* /*req*/) {

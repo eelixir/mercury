@@ -173,13 +173,13 @@ ctest --test-dir build --output-on-failure
 ### Run Backend Server
 
 ```powershell
-.\build\mercury.exe --server --sim --host 127.0.0.1 --port 9001 --symbol SIM
+.\build\mercury.exe --server --sim --host 127.0.0.1 --port 9001 --symbol SIM,AAPL,GOOG
 ```
 
 ### Run Backend Server With Replay
 
 ```powershell
-.\build\mercury.exe --server --sim --host 127.0.0.1 --port 9001 --symbol SIM --replay data\sample_orders_with_clients.csv --replay-speed 10
+.\build\mercury.exe --server --sim --host 127.0.0.1 --port 9001 --symbol SIM,AAPL,GOOG --replay data\sample_orders_with_clients.csv --replay-speed 10
 ```
 
 ### Run Headless Simulation
@@ -225,7 +225,7 @@ Invoke-RestMethod `
   -Method Post `
   -Uri http://127.0.0.1:9001/api/orders `
   -ContentType "application/json" `
-  -Body '{"type":"limit","side":"buy","price":101,"quantity":10,"clientId":1,"tif":"GTC"}'
+  -Body '{"type":"limit","side":"buy","price":101,"quantity":10,"clientId":1,"tif":"GTC","symbol":"SIM"}'
 ```
 
 Simulation control:

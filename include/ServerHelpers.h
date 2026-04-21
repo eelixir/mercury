@@ -175,6 +175,7 @@ namespace Mercury {
                 {"running", state.running},
                 {"replayActive", state.replayActive},
                 {"symbol", state.symbol},
+                {"symbols", state.symbols},
                 {"sequence", state.sequence},
                 {"nextOrderId", state.nextOrderId},
                 {"tradeCount", state.tradeCount},
@@ -223,6 +224,11 @@ namespace Mercury {
         // Order parsing from JSON request body
         // ----------------------------------------------------------------
 
+        struct OrderRequest {
+            Order order;
+            std::string symbol;
+        };
+
         template <typename IdSource>
         inline Order parseOrderFromJson(const json& body, IdSource& idSource) {
             Order order;
@@ -256,7 +262,16 @@ namespace Mercury {
             order.side = parseSide(body.value("side", std::string("buy")));
             order.price = body.value("price", 0LL);
             order.quantity = body.value("quantity", 0ULL);
+
             return order;
+        }
+
+        template <typename IdSource>
+        inline OrderRequest parseOrderRequestFromJson(const json& body, IdSource& idSource, const std::string& defaultSymbol) {
+            OrderRequest req;
+            req.order = parseOrderFromJson(body, idSource);
+            req.symbol = body.value("symbol", defaultSymbol);
+            return req;
         }
 
         // ----------------------------------------------------------------

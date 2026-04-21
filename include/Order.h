@@ -44,6 +44,7 @@ namespace Mercury {
         PriceOutOfRange,        // Price exceeds reasonable bounds
         QuantityOverflow,       // Quantity would cause overflow
         BookEmpty,              // Attempted operation on empty book
+        InvalidSymbol,          // Symbol not found in instrument registry
         InternalError           // Unexpected internal error
     };
 
@@ -65,6 +66,7 @@ namespace Mercury {
             case RejectReason::PriceOutOfRange: return "Price out of acceptable range";
             case RejectReason::QuantityOverflow: return "Quantity overflow";
             case RejectReason::BookEmpty: return "Order book is empty";
+            case RejectReason::InvalidSymbol: return "Symbol not found";
             case RejectReason::InternalError: return "Internal error";
             default: return "Unknown rejection reason";
         }

@@ -84,14 +84,14 @@ TEST(MarketDataTest, OrderBookTopLevelsReturnsRequestedDepth) {
 }
 
 TEST(MarketDataTest, EngineServicePublishesSequencedDeltasTradesStatsAndPnL) {
-    EngineService service("SIM");
+    EngineService service({"SIM"});
     RecordingSink sink;
     service.setMarketDataSink(&sink);
     service.start();
 
-    auto resting = service.submitOrder(makeLimitOrder(1, Side::Sell, 101, 10, 2));
-    auto aggressive = service.submitOrder(makeLimitOrder(2, Side::Buy, 101, 10, 1));
-    auto snapshot = service.getSnapshot(5);
+    auto resting = service.submitOrder("SIM", makeLimitOrder(1, Side::Sell, 101, 10, 2));
+    auto aggressive = service.submitOrder("SIM", makeLimitOrder(2, Side::Buy, 101, 10, 1));
+    auto snapshot = service.getSnapshot("SIM", 5);
     auto state = service.getState();
 
     service.stop();

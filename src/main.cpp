@@ -247,7 +247,7 @@ int runHeadlessSimulation(const Mercury::ServerOptions& options) {
     config.enabled = true;
     config.headless = true;
 
-    Mercury::MarketRuntime runtime(options.symbol, config);
+    Mercury::MarketRuntime runtime(options.symbols, config);
     runtime.start();
 
     if (options.replayFile) {
@@ -345,7 +345,16 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--host" && i + 1 < argc) {
             serverOptions.host = argv[++i];
         } else if (arg == "--symbol" && i + 1 < argc) {
-            serverOptions.symbol = argv[++i];
+            std::string syms = argv[++i];
+            serverOptions.symbols.clear();
+            size_t pos = 0;
+            while ((pos = syms.find(',')) != std::string::npos) {
+                if (pos > 0) serverOptions.symbols.push_back(syms.substr(0, pos));
+                syms.erase(0, pos + 1);
+            }
+            if (!syms.empty()) {
+                serverOptions.symbols.push_back(syms);
+            }
         }
     }
 

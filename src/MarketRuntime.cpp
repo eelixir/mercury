@@ -414,26 +414,35 @@ namespace Mercury {
 
     }
 
-    MarketRuntime::MarketRuntime(std::string symbol, SimulationConfig simulationConfig)
-        : symbol_(std::move(symbol)),
+    MarketRuntime::MarketRuntime(std::vector<std::string> symbols, SimulationConfig simulationConfig)
+        : symbols_(std::move(symbols)),
           simulationConfig_(simulationConfig),
           rng_(simulationConfig.seed) {
+        if (symbols_.empty()) {
+            symbols_.push_back("SIM");
+        }
+        for (const auto& sym : symbols_) {
+            envs_[sym] = PerSymbolEnvironment{};
+        }
         createEngineService();
         rebuildAgents();
     }
+
+    MarketRuntime::MarketRuntime(std::string symbol, SimulationConfig simulationConfig)
+        : MarketRuntime(std::vector<std::string>{std::move(symbol)}, simulationConfig) {}
 
     MarketRuntime::~MarketRuntime() {
         stop();
     }
 
     void MarketRuntime::createEngineService() {
-        engineService_ = std::make_unique<EngineService>(symbol_);
+        engineService_ = std::make_unique<EngineService>(symbols_);
         engineService_->setMarketDataSink(this);
     }
 
     void MarketRuntime::rebuildAgents() {
         std::lock_guard<std::mutex> lock(agentsMutex_);
-        agents_.clear();
+        agentsBySymbol_.clear();
 
         auto schedule = [this](uint64_t baseMs) {
             if (baseMs == 0) {
@@ -443,28 +452,34 @@ namespace Mercury {
             return dist(rng_);
         };
 
-        for (size_t i = 0; i < simulationConfig_.marketMakerCount; ++i) {
-            auto agent = std::make_unique<PassiveMarketMakerAgent>(simulationConfig_.volatility);
-            const auto base = agent->wakeIntervalMs();
-            agents_.push_back(AgentSlot{std::move(agent), 1000 + static_cast<uint64_t>(i), schedule(base)});
-        }
+        for (size_t symIdx = 0; symIdx < symbols_.size(); ++symIdx) {
+            const auto& sym = symbols_[symIdx];
+            auto& agents = agentsBySymbol_[sym];
+            const uint64_t symOffset = static_cast<uint64_t>(symIdx) * 10000;
 
-        for (size_t i = 0; i < simulationConfig_.momentumCount; ++i) {
-            auto agent = std::make_unique<AggressiveMomentumAgent>(simulationConfig_.volatility);
-            const auto base = agent->wakeIntervalMs();
-            agents_.push_back(AgentSlot{std::move(agent), 2000 + static_cast<uint64_t>(i), schedule(base)});
-        }
+            for (size_t i = 0; i < simulationConfig_.marketMakerCount; ++i) {
+                auto agent = std::make_unique<PassiveMarketMakerAgent>(simulationConfig_.volatility);
+                const auto base = agent->wakeIntervalMs();
+                agents.push_back(AgentSlot{std::move(agent), symOffset + 1000 + static_cast<uint64_t>(i), schedule(base)});
+            }
 
-        for (size_t i = 0; i < simulationConfig_.meanReversionCount; ++i) {
-            auto agent = std::make_unique<MeanReversionAgent>(simulationConfig_.volatility);
-            const auto base = agent->wakeIntervalMs();
-            agents_.push_back(AgentSlot{std::move(agent), 3000 + static_cast<uint64_t>(i), schedule(base)});
-        }
+            for (size_t i = 0; i < simulationConfig_.momentumCount; ++i) {
+                auto agent = std::make_unique<AggressiveMomentumAgent>(simulationConfig_.volatility);
+                const auto base = agent->wakeIntervalMs();
+                agents.push_back(AgentSlot{std::move(agent), symOffset + 2000 + static_cast<uint64_t>(i), schedule(base)});
+            }
 
-        for (const auto& descriptor : customAgentFactories_) {
-            auto agent = descriptor.factory();
-            const auto base = agent->wakeIntervalMs();
-            agents_.push_back(AgentSlot{std::move(agent), descriptor.clientId, schedule(base)});
+            for (size_t i = 0; i < simulationConfig_.meanReversionCount; ++i) {
+                auto agent = std::make_unique<MeanReversionAgent>(simulationConfig_.volatility);
+                const auto base = agent->wakeIntervalMs();
+                agents.push_back(AgentSlot{std::move(agent), symOffset + 3000 + static_cast<uint64_t>(i), schedule(base)});
+            }
+
+            for (const auto& descriptor : customAgentFactories_) {
+                auto agent = descriptor.factory();
+                const auto base = agent->wakeIntervalMs();
+                agents.push_back(AgentSlot{std::move(agent), descriptor.clientId, schedule(base)});
+            }
         }
     }
 
@@ -514,15 +529,27 @@ namespace Mercury {
     }
 
     ExecutionResult MarketRuntime::submitOrder(Order order) {
-        return submitOrder(std::move(order), 0);
+        return submitOrder(symbols_.front(), std::move(order), 0);
     }
 
     ExecutionResult MarketRuntime::submitOrder(Order order, uint64_t entryTimestampNs) {
-        return engineService_->submitOrder(std::move(order), entryTimestampNs);
+        return submitOrder(symbols_.front(), std::move(order), entryTimestampNs);
+    }
+
+    ExecutionResult MarketRuntime::submitOrder(const std::string& symbol, Order order) {
+        return submitOrder(symbol, std::move(order), 0);
+    }
+
+    ExecutionResult MarketRuntime::submitOrder(const std::string& symbol, Order order, uint64_t entryTimestampNs) {
+        return engineService_->submitOrder(symbol, std::move(order), entryTimestampNs);
     }
 
     L2Snapshot MarketRuntime::getSnapshot(size_t depth) {
-        return engineService_->getSnapshot(depth);
+        return engineService_->getSnapshot(symbols_.front(), depth);
+    }
+
+    L2Snapshot MarketRuntime::getSnapshot(const std::string& symbol, size_t depth) {
+        return engineService_->getSnapshot(symbol, depth);
     }
 
     MarketRuntimeState MarketRuntime::getState() {
@@ -531,7 +558,8 @@ namespace Mercury {
         MarketRuntimeState state;
         state.running = engineState.running;
         state.replayActive = engineState.replayActive;
-        state.symbol = engineState.symbol;
+        state.symbol = engineState.symbols.empty() ? "SIM" : engineState.symbols.front();
+        state.symbols = engineState.symbols;
         state.sequence = engineState.sequence;
         state.nextOrderId = engineState.nextOrderId;
         state.tradeCount = engineState.tradeCount;
@@ -553,8 +581,12 @@ namespace Mercury {
         {
             std::lock_guard<std::mutex> lock(stateMutex_);
             state.simulationTimestamp = simulationTimestampMs_;
-            state.realizedVolatilityBps = realizedVolatilityBps_;
-            state.averageSpread = averageSpread_;
+            const auto& primarySym = symbols_.front();
+            auto envIt = envs_.find(primarySym);
+            if (envIt != envs_.end()) {
+                state.realizedVolatilityBps = envIt->second.realizedVolatilityBps;
+                state.averageSpread = envIt->second.averageSpread;
+            }
         }
 
         return state;
@@ -571,7 +603,10 @@ namespace Mercury {
         summary.averageSpread = state.averageSpread;
 
         std::lock_guard<std::mutex> lock(stateMutex_);
-        summary.lastMidPrice = lastStats_.midPrice;
+        auto envIt = envs_.find(symbols_.front());
+        if (envIt != envs_.end()) {
+            summary.lastMidPrice = envIt->second.lastStats.midPrice;
+        }
         return summary;
     }
 
@@ -660,18 +695,19 @@ namespace Mercury {
         {
             std::lock_guard<std::mutex> lock(stateMutex_);
             lastPublishedSequence_ = std::max(lastPublishedSequence_, trade.sequence);
-            recentTrades_.insert(recentTrades_.begin(), trade);
-            if (recentTrades_.size() > 64) {
-                recentTrades_.resize(64);
+            auto& env = envs_[trade.symbol];
+            env.recentTrades.insert(env.recentTrades.begin(), trade);
+            if (env.recentTrades.size() > 64) {
+                env.recentTrades.resize(64);
             }
 
             auto reduceOrder = [&](uint64_t orderId, uint64_t fillQty) {
-                auto it = liveOrdersById_.find(orderId);
-                if (it == liveOrdersById_.end()) {
+                auto it = env.liveOrdersById.find(orderId);
+                if (it == env.liveOrdersById.end()) {
                     return;
                 }
                 if (it->second.quantity <= fillQty) {
-                    liveOrdersById_.erase(it);
+                    env.liveOrdersById.erase(it);
                 } else {
                     it->second.quantity -= fillQty;
                 }
@@ -688,8 +724,8 @@ namespace Mercury {
         {
             std::lock_guard<std::mutex> lock(stateMutex_);
             lastPublishedSequence_ = std::max(lastPublishedSequence_, stats.sequence);
-            lastStats_ = stats;
-            updateMetricsFromStats(stats);
+            envs_[stats.symbol].lastStats = stats;
+            updateMetricsFromStats(stats.symbol, stats);
         }
         fanout([&](MarketDataSink* sink) { sink->onStatsEvent(stats); });
     }
@@ -698,7 +734,7 @@ namespace Mercury {
         {
             std::lock_guard<std::mutex> lock(stateMutex_);
             lastPublishedSequence_ = std::max(lastPublishedSequence_, pnl.sequence);
-            pnlByClient_[pnl.clientId] = pnl;
+            envs_[pnl.symbol].pnlByClient[pnl.clientId] = pnl;
         }
         fanout([&](MarketDataSink* sink) { sink->onPnLEvent(pnl); });
     }
@@ -711,31 +747,32 @@ namespace Mercury {
         fanout([&](MarketDataSink* sink) { sink->onExecutionEvent(execution); });
     }
 
-    void MarketRuntime::updateMetricsFromStats(const StatsEvent& stats) {
+    void MarketRuntime::updateMetricsFromStats(const std::string& symbol, const StatsEvent& stats) {
+        auto& env = envs_[symbol];
         if (stats.spread > 0) {
-            if (averageSpread_ <= 0.0) {
-                averageSpread_ = static_cast<double>(stats.spread);
+            if (env.averageSpread <= 0.0) {
+                env.averageSpread = static_cast<double>(stats.spread);
             } else {
-                averageSpread_ = averageSpread_ * 0.9 + static_cast<double>(stats.spread) * 0.1;
+                env.averageSpread = env.averageSpread * 0.9 + static_cast<double>(stats.spread) * 0.1;
             }
         }
 
         if (stats.midPrice > 0) {
-            midHistory_.push_back(stats.midPrice);
-            if (midHistory_.size() > 64) {
-                midHistory_.erase(midHistory_.begin());
+            env.midHistory.push_back(stats.midPrice);
+            if (env.midHistory.size() > 64) {
+                env.midHistory.erase(env.midHistory.begin());
             }
 
-            if (midHistory_.size() >= 8) {
+            if (env.midHistory.size() >= 8) {
                 std::vector<double> returns;
-                returns.reserve(midHistory_.size() - 1);
-                for (size_t i = 1; i < midHistory_.size(); ++i) {
-                    if (midHistory_[i - 1] <= 0) {
+                returns.reserve(env.midHistory.size() - 1);
+                for (size_t i = 1; i < env.midHistory.size(); ++i) {
+                    if (env.midHistory[i - 1] <= 0) {
                         continue;
                     }
                     returns.push_back(
-                        (static_cast<double>(midHistory_[i]) - static_cast<double>(midHistory_[i - 1])) /
-                        static_cast<double>(midHistory_[i - 1]));
+                        (static_cast<double>(env.midHistory[i]) - static_cast<double>(env.midHistory[i - 1])) /
+                        static_cast<double>(env.midHistory[i - 1]));
                 }
 
                 if (!returns.empty()) {
@@ -751,27 +788,28 @@ namespace Mercury {
                         variance += diff * diff;
                     }
                     variance /= static_cast<double>(returns.size());
-                    realizedVolatilityBps_ = std::sqrt(variance) * 10000.0;
+                    env.realizedVolatilityBps = std::sqrt(variance) * 10000.0;
                 }
             }
         }
     }
 
-    SimulationObservation MarketRuntime::buildObservation(uint64_t clientId) {
+    SimulationObservation MarketRuntime::buildObservation(const std::string& symbol, uint64_t clientId) {
         SimulationObservation observation;
-        observation.snapshot = engineService_->getSnapshot(20);
+        observation.snapshot = engineService_->getSnapshot(symbol, 20);
 
         {
             std::lock_guard<std::mutex> lock(stateMutex_);
-            observation.recentTrades = recentTrades_;
-            observation.stats = lastStats_;
+            auto& env = envs_[symbol];
+            observation.recentTrades = env.recentTrades;
+            observation.stats = env.lastStats;
 
-            auto pnlIt = pnlByClient_.find(clientId);
-            if (pnlIt != pnlByClient_.end()) {
+            auto pnlIt = env.pnlByClient.find(clientId);
+            if (pnlIt != env.pnlByClient.end()) {
                 observation.ownPnL = pnlIt->second;
             }
 
-            for (const auto& [orderId, record] : liveOrdersById_) {
+            for (const auto& [orderId, record] : env.liveOrdersById) {
                 if (record.clientId != clientId) {
                     continue;
                 }
@@ -783,17 +821,17 @@ namespace Mercury {
                 });
             }
 
-            observation.environment.latentFairValue = latentFairValue_;
-            observation.environment.momentumBurst = momentumBurst_;
-            observation.environment.momentumDirection = momentumDirection_;
-            observation.environment.realizedVolatilityBps = realizedVolatilityBps_;
-            observation.environment.averageSpread = averageSpread_;
+            observation.environment.latentFairValue = env.latentFairValue;
+            observation.environment.momentumBurst = env.momentumBurst;
+            observation.environment.momentumDirection = env.momentumDirection;
+            observation.environment.realizedVolatilityBps = env.realizedVolatilityBps;
+            observation.environment.averageSpread = env.averageSpread;
             observation.environment.volatilityPreset = simulationVolatilityToString(simulationConfig_.volatility);
             observation.environment.simulationTimestamp = simulationTimestampMs_;
         }
 
         if (observation.stats.timestamp == 0) {
-            observation.stats.symbol = symbol_;
+            observation.stats.symbol = symbol;
             observation.stats.midPrice = observation.snapshot.midPrice;
             observation.stats.spread = observation.snapshot.spread;
             observation.stats.bestBid = observation.snapshot.bestBid;
@@ -847,15 +885,16 @@ namespace Mercury {
         return order;
     }
 
-    void MarketRuntime::applyExecutionToLiveOrders(const Order& order, const ExecutionResult& result) {
+    void MarketRuntime::applyExecutionToLiveOrders(const std::string& symbol, const Order& order, const ExecutionResult& result) {
         std::lock_guard<std::mutex> lock(stateMutex_);
+        auto& liveOrders = envs_[symbol].liveOrdersById;
 
         auto upsertLiveOrder = [&](uint64_t orderId, Side side, int64_t price, uint64_t quantity, uint64_t clientId) {
             if (quantity == 0) {
-                liveOrdersById_.erase(orderId);
+                liveOrders.erase(orderId);
                 return;
             }
-            liveOrdersById_[orderId] = LiveOrderRecord{orderId, clientId, side, price, quantity};
+            liveOrders[orderId] = LiveOrderRecord{orderId, clientId, side, price, quantity};
         };
 
         switch (order.orderType) {
@@ -865,14 +904,14 @@ namespace Mercury {
                     result.remainingQuantity > 0) {
                     upsertLiveOrder(order.id, order.side, order.price, result.remainingQuantity, order.clientId);
                 } else {
-                    liveOrdersById_.erase(order.id);
+                    liveOrders.erase(order.id);
                 }
                 break;
             case OrderType::Market:
-                liveOrdersById_.erase(order.id);
+                liveOrders.erase(order.id);
                 break;
             case OrderType::Cancel:
-                liveOrdersById_.erase(order.id);
+                liveOrders.erase(order.id);
                 break;
             case OrderType::Modify:
                 if ((result.status == ExecutionStatus::Modified || result.status == ExecutionStatus::PartialFill) &&
@@ -880,51 +919,51 @@ namespace Mercury {
                     const int64_t nextPrice = order.newPrice > 0 ? order.newPrice : order.price;
                     upsertLiveOrder(order.targetOrderId, order.side, nextPrice, result.remainingQuantity, order.clientId);
                 } else {
-                    liveOrdersById_.erase(order.targetOrderId);
+                    liveOrders.erase(order.targetOrderId);
                 }
                 break;
         }
     }
 
-    void MarketRuntime::advanceEnvironment(uint64_t stepMs) {
+    void MarketRuntime::advanceEnvironment(const std::string& symbol, uint64_t stepMs) {
         const auto params = paramsForPreset(simulationConfig_.volatility);
         std::normal_distribution<double> noise(0.0, params.fairValueSigma);
         std::uniform_real_distribution<double> uniform(0.0, 1.0);
 
         std::lock_guard<std::mutex> lock(stateMutex_);
-        simulationTimestampMs_ += stepMs;
+        auto& env = envs_[symbol];
 
-        if (latentFairValue_ <= 0) {
-            latentFairValue_ = lastStats_.midPrice > 0 ? lastStats_.midPrice : 100;
+        if (env.latentFairValue <= 0) {
+            env.latentFairValue = env.lastStats.midPrice > 0 ? env.lastStats.midPrice : 100;
         }
 
         const int64_t anchorPrice =
-            lastStats_.midPrice > 0
-                ? lastStats_.midPrice
-                : (lastStats_.bestBid && lastStats_.bestAsk
-                    ? (*lastStats_.bestBid + *lastStats_.bestAsk) / 2
+            env.lastStats.midPrice > 0
+                ? env.lastStats.midPrice
+                : (env.lastStats.bestBid && env.lastStats.bestAsk
+                    ? (*env.lastStats.bestBid + *env.lastStats.bestAsk) / 2
                     : 100);
         const int64_t noiseTicks = std::clamp(
             static_cast<int64_t>(std::llround(noise(rng_))),
             -params.maxNoiseTicks,
             params.maxNoiseTicks);
         const int64_t pullTicks = static_cast<int64_t>(std::llround(
-            static_cast<double>(anchorPrice - latentFairValue_) * params.fairValuePull));
+            static_cast<double>(anchorPrice - env.latentFairValue) * params.fairValuePull));
 
-        latentFairValue_ += pullTicks + noiseTicks;
-        latentFairValue_ = std::max<int64_t>(1, latentFairValue_);
+        env.latentFairValue += pullTicks + noiseTicks;
+        env.latentFairValue = std::max<int64_t>(1, env.latentFairValue);
 
-        if (burstRemainingMs_ > 0) {
-            latentFairValue_ += momentumDirection_ * params.burstStepTicks;
-            burstRemainingMs_ = burstRemainingMs_ > stepMs ? burstRemainingMs_ - stepMs : 0;
-            momentumBurst_ = burstRemainingMs_ > 0;
-            if (!momentumBurst_) {
-                momentumDirection_ = 0;
+        if (env.burstRemainingMs > 0) {
+            env.latentFairValue += env.momentumDirection * params.burstStepTicks;
+            env.burstRemainingMs = env.burstRemainingMs > stepMs ? env.burstRemainingMs - stepMs : 0;
+            env.momentumBurst = env.burstRemainingMs > 0;
+            if (!env.momentumBurst) {
+                env.momentumDirection = 0;
             }
         } else if (uniform(rng_) < params.burstProbabilityPerStep) {
-            momentumBurst_ = true;
-            momentumDirection_ = uniform(rng_) < 0.5 ? -1 : 1;
-            burstRemainingMs_ = params.burstDurationMs;
+            env.momentumBurst = true;
+            env.momentumDirection = uniform(rng_) < 0.5 ? -1 : 1;
+            env.burstRemainingMs = params.burstDurationMs;
         }
     }
 
@@ -937,45 +976,50 @@ namespace Mercury {
 
         std::lock_guard<std::mutex> agentsLock(agentsMutex_);
 
-        for (auto& slot : agents_) {
-            size_t catchUpWakes = 0;
-            while (currentSimTime >= slot.nextWakeMs && catchUpWakes < 3) {
-                auto observation = buildObservation(slot.clientId);
-                auto intents = slot.agent->onWake(observation);
-                for (const auto& intent : intents) {
-                    if (intent.kind == OrderIntentKind::None) {
-                        continue;
+        for (auto& [sym, agents] : agentsBySymbol_) {
+            for (auto& slot : agents) {
+                size_t catchUpWakes = 0;
+                while (currentSimTime >= slot.nextWakeMs && catchUpWakes < 3) {
+                    auto observation = buildObservation(sym, slot.clientId);
+                    auto intents = slot.agent->onWake(observation);
+                    for (const auto& intent : intents) {
+                        if (intent.kind == OrderIntentKind::None) {
+                            continue;
+                        }
+
+                        auto order = translateIntent(intent, slot.clientId);
+                        auto result = engineService_->submitOrder(sym, order);
+                        applyExecutionToLiveOrders(sym, order, result);
                     }
 
-                    auto order = translateIntent(intent, slot.clientId);
-                    auto result = engineService_->submitOrder(order);
-                    applyExecutionToLiveOrders(order, result);
+                    const uint64_t baseWake = std::max<uint64_t>(1, slot.agent->wakeIntervalMs());
+                    std::uniform_int_distribution<uint64_t> dist(0, baseWake / 3 + 1);
+                    slot.nextWakeMs += baseWake + dist(rng_);
+                    ++catchUpWakes;
                 }
 
-                const uint64_t baseWake = std::max<uint64_t>(1, slot.agent->wakeIntervalMs());
-                std::uniform_int_distribution<uint64_t> dist(0, baseWake / 3 + 1);
-                slot.nextWakeMs += baseWake + dist(rng_);
-                ++catchUpWakes;
-            }
-
-            if (currentSimTime >= slot.nextWakeMs) {
-                const uint64_t baseWake = std::max<uint64_t>(1, slot.agent->wakeIntervalMs());
-                std::uniform_int_distribution<uint64_t> dist(baseWake / 4, baseWake / 2 + 1);
-                slot.nextWakeMs = currentSimTime + dist(rng_);
+                if (currentSimTime >= slot.nextWakeMs) {
+                    const uint64_t baseWake = std::max<uint64_t>(1, slot.agent->wakeIntervalMs());
+                    std::uniform_int_distribution<uint64_t> dist(baseWake / 4, baseWake / 2 + 1);
+                    slot.nextWakeMs = currentSimTime + dist(rng_);
+                }
             }
         }
     }
 
     void MarketRuntime::publishSimulationState(bool force) {
-        SimulationStateEvent event;
-        {
-            std::lock_guard<std::mutex> lock(stateMutex_);
-            if (!force && simulationTimestampMs_ - lastSimStatePublishMs_ < simulationConfig_.publishIntervalMs) {
-                return;
+        std::lock_guard<std::mutex> lock(stateMutex_);
+
+        for (const auto& sym : symbols_) {
+            auto& env = envs_[sym];
+            if (!force && simulationTimestampMs_ - env.lastSimStatePublishMs < simulationConfig_.publishIntervalMs) {
+                continue;
             }
-            lastSimStatePublishMs_ = simulationTimestampMs_;
+            env.lastSimStatePublishMs = simulationTimestampMs_;
+
+            SimulationStateEvent event;
             event.sequence = lastPublishedSequence_;
-            event.symbol = symbol_;
+            event.symbol = sym;
             event.enabled = simulationConfig_.enabled;
             event.running = running_.load();
             event.paused = simulationPaused_.load();
@@ -986,11 +1030,11 @@ namespace Mercury {
             event.marketMakerCount = simulationConfig_.marketMakerCount;
             event.momentumCount = simulationConfig_.momentumCount;
             event.meanReversionCount = simulationConfig_.meanReversionCount;
-            event.realizedVolatilityBps = realizedVolatilityBps_;
-            event.averageSpread = averageSpread_;
-        }
+            event.realizedVolatilityBps = env.realizedVolatilityBps;
+            event.averageSpread = env.averageSpread;
 
-        fanout([&](MarketDataSink* sink) { sink->onSimulationState(event); });
+            fanout([&](MarketDataSink* sink) { sink->onSimulationState(event); });
+        }
     }
 
     void MarketRuntime::simulationLoop() {
@@ -1001,7 +1045,14 @@ namespace Mercury {
                 continue;
             }
 
-            advanceEnvironment(stepMs);
+            {
+                std::lock_guard<std::mutex> lock(stateMutex_);
+                simulationTimestampMs_ += stepMs;
+            }
+
+            for (const auto& sym : symbols_) {
+                advanceEnvironment(sym, stepMs);
+            }
             maybeWakeAgents();
             publishSimulationState(false);
 
@@ -1021,20 +1072,11 @@ namespace Mercury {
 
         {
             std::lock_guard<std::mutex> lock(stateMutex_);
-            recentTrades_.clear();
-            lastStats_ = StatsEvent{};
-            pnlByClient_.clear();
-            liveOrdersById_.clear();
-            midHistory_.clear();
+            for (auto& [sym, env] : envs_) {
+                env = PerSymbolEnvironment{};
+            }
             simulationTimestampMs_ = 0;
-            latentFairValue_ = 100;
-            momentumBurst_ = false;
-            momentumDirection_ = 0;
-            burstRemainingMs_ = 0;
-            averageSpread_ = 0.0;
-            realizedVolatilityBps_ = 0.0;
             lastPublishedSequence_ = 0;
-            lastSimStatePublishMs_ = 0;
         }
 
         createEngineService();

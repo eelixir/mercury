@@ -144,7 +144,7 @@ Design constraints:
 
 - simulation runs on one dedicated runtime thread, not one thread per bot
 - `EngineService` remains the only mutation path into `MatchingEngine`
-- the core engine remains single-book and single-symbol
+- the core engine layer remains single-book, with multi-instrument support managed by a registry in EngineService
 - custom v1 strategies are in-process C++ `SimulationAgent` implementations
 
 ### Simulation Environment And Agents
@@ -200,14 +200,14 @@ Relevant files:
 - `include/EngineService.h`
 - `src/EngineService.cpp`
 
-`EngineService` is the live service boundary around the single-book engine.
+`EngineService` is the live service boundary around a registry of `InstrumentBook` instances.
 
 Responsibilities:
 
-- own the live `MatchingEngine`
-- own `PnLTracker`
+- own the registry of live `MatchingEngine` instances keyed by symbol
+- own `PnLTracker` instances for each symbol
 - own the monotonically increasing outbound `sequence`
-- serialize all mutations on one dedicated engine thread
+- serialize all mutations across all symbols on one dedicated engine thread
 - produce L2 snapshots, deltas, trades, executions, stats, and PnL events on that engine thread
 
 Design constraints:
@@ -304,8 +304,8 @@ Relevant file:
 Fixed-width `#pragma pack(push, 1)` structs for wire-efficient streaming:
 
 - `BinaryHeader` (4 bytes): type (1=book_delta, 2=trade), reserved, length
-- `BinaryBookDelta` (53 bytes): header + sequence, side, price, quantity, orderCount, action, timestamp, engineLatencyNs
-- `BinaryTradeEvent` (77 bytes): header + sequence, tradeId, price, quantity, orderIds, clientIds, timestamp, engineLatencyNs
+- `BinaryBookDelta` (61 bytes): header + sequence, symbol (8 bytes), side, price, quantity, orderCount, action, timestamp, engineLatencyNs
+- `BinaryTradeEvent` (85 bytes): header + sequence, symbol (8 bytes), tradeId, price, quantity, orderIds, clientIds, timestamp, engineLatencyNs
 
 All fields are little-endian (host order on x86/x64).
 
