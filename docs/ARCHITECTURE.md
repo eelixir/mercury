@@ -13,6 +13,7 @@ This document describes the architecture that is present in the repository today
 
 When `MERCURY_BUILD_SERVER=ON`, the configure step also fetches and wires:
 
+- `abseil-cpp`
 - `nlohmann_json`
 - `libuv`
 - `uWebSockets`
@@ -84,10 +85,16 @@ Relevant files:
 
 Key design choices:
 
-- bid and ask ladders are maintained with `std::map`
+- bid and ask ladders are maintained with `absl::btree_map`
 - per-price FIFO queues are implemented with intrusive nodes
-- order lookup is O(1) average through the custom hash map
+- order lookup is O(1) average through a repository `HashMap` wrapper backed by `absl::flat_hash_map`
 - node allocation is pooled through `ObjectPool`
+
+Why this split:
+
+- `absl::btree_map` preserves sorted best-price traversal without the pointer-heavy red-black tree layout of `std::map`
+- intrusive per-price queues preserve O(1) FIFO insert/remove and direct node ownership
+- the `HashMap` wrapper keeps existing call sites and tests stable while allowing the backing hash container to change
 
 Market-data support:
 

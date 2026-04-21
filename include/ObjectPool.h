@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include "BenchTiming.h"
+
 #include <cstddef>
 #include <vector>
 #include <memory>
@@ -70,6 +72,8 @@ namespace Mercury {
          * @return Pointer to an available object, or nullptr if pool exhausted
          */
         T* acquire() {
+            MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::ObjectPool);
+
             // Try to get from free list
             if (freeList_) {
                 FreeNode* node = freeList_;
@@ -98,6 +102,8 @@ namespace Mercury {
          * @param obj Pointer to object to release
          */
         void release(T* obj) {
+            MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::ObjectPool);
+
             if (!obj) return;
 
             // Call destructor

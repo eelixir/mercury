@@ -3,10 +3,10 @@
  * @brief High-performance order book using custom data structures
  * 
  * Optimizations implemented:
- * 1. Custom HashMap for O(1) order ID lookups (Robin Hood hashing)
+ * 1. Abseil flat_hash_map wrapper for O(1) order ID lookups
  * 2. IntrusiveList for O(1) order insertion/removal at price levels
  * 3. ObjectPool for allocation-free order management
- * 4. std::map for sorted price levels (future: replace with skip list)
+ * 4. Abseil btree_map for sorted price levels with better locality
  * 
  * Complexity:
  * - addOrder: O(log P) where P = number of price levels
@@ -23,7 +23,8 @@
 #include "PriceLevel.h"
 #include "HashMap.h"
 #include "ObjectPool.h"
-#include <map>
+#include "BenchTiming.h"
+#include <absl/container/btree_map.h>
 #include <iostream>
 #include <optional>
 #include <limits>
@@ -33,6 +34,9 @@ namespace Mercury {
 
     class OrderBook {
     public:
+        using BidLevelsMap = absl::btree_map<int64_t, PriceLevel, std::greater<int64_t>>;
+        using AskLevelsMap = absl::btree_map<int64_t, PriceLevel>;
+
         // Configuration constants
         static constexpr size_t DEFAULT_ORDER_POOL_SIZE = 10000;
 
@@ -78,10 +82,12 @@ namespace Mercury {
             // Get or create price level
             PriceLevel* level = nullptr;
             if (order.side == Side::Buy) {
+                MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::LadderMap);
                 auto& levelRef = bids_[order.price];
                 levelRef.price = order.price;
                 level = &levelRef;
             } else {
+                MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::LadderMap);
                 auto& levelRef = asks_[order.price];
                 levelRef.price = order.price;
                 level = &levelRef;
@@ -109,32 +115,53 @@ namespace Mercury {
                 return false;
             }
 
-            OrderNode* node = loc->node;
-            int64_t price = loc->price;
-            Side side = loc->side;
+            return removeOrder(loc->node);
+        }
+
+        /**
+         * Remove an order from the book using a direct node pointer
+         * @return true if removed, false if invalid
+         */
+        bool removeOrder(OrderNode* node) {
+            if (!node || node->id == 0) {
+                return false;
+            }
+
+            const int64_t price = node->price;
+            const Side side = node->side;
 
             // Remove from price level
             if (side == Side::Buy) {
-                auto it = bids_.find(price);
+                auto it = bids_.end();
+                {
+                    MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::LadderMap);
+                    it = bids_.find(price);
+                }
                 if (it != bids_.end()) {
                     it->second.removeOrder(node);
                     // Remove empty price level
                     if (it->second.empty()) {
+                        MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::LadderMap);
                         bids_.erase(it);
                     }
                 }
             } else {
-                auto it = asks_.find(price);
+                auto it = asks_.end();
+                {
+                    MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::LadderMap);
+                    it = asks_.find(price);
+                }
                 if (it != asks_.end()) {
                     it->second.removeOrder(node);
                     if (it->second.empty()) {
+                        MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::LadderMap);
                         asks_.erase(it);
                     }
                 }
             }
 
             // Remove from lookup
-            orderLookup_.erase(orderId);
+            orderLookup_.erase(node->id);
 
             // Release node back to pool
             node->reset();
@@ -176,22 +203,41 @@ namespace Mercury {
             OrderLocation* loc = orderLookup_.find(orderId);
             if (!loc) return false;
 
-            if (newQuantity == 0) {
-                return removeOrder(orderId);
+            return updateOrderQuantity(loc->node, newQuantity);
+        }
+
+        /**
+         * Update order quantity using a direct node pointer
+         * @return true if updated, false if invalid
+         */
+        bool updateOrderQuantity(OrderNode* node, uint64_t newQuantity) {
+            if (!node || node->id == 0) {
+                return false;
             }
 
-            OrderNode* node = loc->node;
-            int64_t price = loc->price;
-            Side side = loc->side;
+            if (newQuantity == 0) {
+                return removeOrder(node);
+            }
+
+            const int64_t price = node->price;
+            const Side side = node->side;
 
             // Update in price level
             if (side == Side::Buy) {
-                auto it = bids_.find(price);
+                auto it = bids_.end();
+                {
+                    MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::LadderMap);
+                    it = bids_.find(price);
+                }
                 if (it != bids_.end()) {
                     it->second.updateOrderQuantity(node, newQuantity);
                 }
             } else {
-                auto it = asks_.find(price);
+                auto it = asks_.end();
+                {
+                    MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::LadderMap);
+                    it = asks_.find(price);
+                }
                 if (it != asks_.end()) {
                     it->second.updateOrderQuantity(node, newQuantity);
                 }
@@ -239,21 +285,25 @@ namespace Mercury {
          * @return Pointer to PriceLevel or nullptr
          */
         PriceLevel* getBidLevel(int64_t price) {
+            MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::LadderMap);
             auto it = bids_.find(price);
             return (it != bids_.end()) ? &it->second : nullptr;
         }
 
         PriceLevel* getAskLevel(int64_t price) {
+            MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::LadderMap);
             auto it = asks_.find(price);
             return (it != asks_.end()) ? &it->second : nullptr;
         }
 
         const PriceLevel* getBidLevel(int64_t price) const {
+            MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::LadderMap);
             auto it = bids_.find(price);
             return (it != bids_.end()) ? &it->second : nullptr;
         }
 
         const PriceLevel* getAskLevel(int64_t price) const {
+            MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::LadderMap);
             auto it = asks_.find(price);
             return (it != asks_.end()) ? &it->second : nullptr;
         }
@@ -284,11 +334,11 @@ namespace Mercury {
         // Legacy API (for compatibility with existing tests/MatchingEngine)
         // =====================================================================
 
-        const std::map<int64_t, PriceLevel, std::greater<int64_t>>& getBidLevels() const { 
+        const BidLevelsMap& getBidLevels() const {
             return bids_; 
         }
         
-        const std::map<int64_t, PriceLevel>& getAskLevels() const { 
+        const AskLevelsMap& getAskLevels() const {
             return asks_; 
         }
 
@@ -325,9 +375,11 @@ namespace Mercury {
 
         [[nodiscard]] uint64_t getQuantityAtPrice(int64_t price, Side side) const {
             if (side == Side::Buy) {
+                MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::LadderMap);
                 auto it = bids_.find(price);
                 return (it != bids_.end()) ? it->second.quantity() : 0;
             } else {
+                MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::LadderMap);
                 auto it = asks_.find(price);
                 return (it != asks_.end()) ? it->second.quantity() : 0;
             }
@@ -335,9 +387,11 @@ namespace Mercury {
 
         [[nodiscard]] size_t getOrderCountAtPrice(int64_t price, Side side) const {
             if (side == Side::Buy) {
+                MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::LadderMap);
                 auto it = bids_.find(price);
                 return (it != bids_.end()) ? it->second.size() : 0;
             } else {
+                MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::LadderMap);
                 auto it = asks_.find(price);
                 return (it != asks_.end()) ? it->second.size() : 0;
             }
@@ -467,10 +521,10 @@ namespace Mercury {
         };
 
         // Bids: sorted by price descending (best bid = highest price first)
-        std::map<int64_t, PriceLevel, std::greater<int64_t>> bids_;
+        BidLevelsMap bids_;
 
         // Asks: sorted by price ascending (best ask = lowest price first)
-        std::map<int64_t, PriceLevel> asks_;
+        AskLevelsMap asks_;
 
         // O(1) order lookup by ID
         HashMap<uint64_t, OrderLocation, OrderIdHash> orderLookup_;

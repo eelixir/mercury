@@ -1,6 +1,6 @@
 # <img src="https://github.com/user-attachments/assets/7ee41ddf-cf24-42fb-953b-d44c55e9f352" width="400">
 
-> High-performance C++ matching engine and live market simulation dashboard built from scratch with custom data structures, real-time WebSocket streaming, and bounded agent-based microstructure dynamics.
+> High-performance C++ matching engine and live market simulation dashboard built around a custom intrusive order-book core, Abseil-backed containers, real-time WebSocket streaming, and bounded agent-based microstructure dynamics.
 
 ## Overview
 
@@ -66,11 +66,14 @@ Mercury is a low-latency trading engine implementing a full limit order book wit
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Custom Data Structures
+### Core Data Structures
+
+The core book keeps intrusive FIFO queues inside each price level while using `absl::btree_map` for sorted bid/ask ladders and an Abseil-backed `HashMap` wrapper for O(1) average order lookup.
 
 | Component | Purpose | Complexity |
 |-----------|---------|------------|
-| **HashMap** | Order ID → location lookup | O(1) avg |
+| **HashMap** | Abseil-backed `flat_hash_map` wrapper for order lookup | O(1) avg |
+| **btree_map ladders** | Sorted bid/ask price ladders with cache-friendly traversal | O(log N) level ops |
 | **IntrusiveList** | Order queue at each price level | O(1) insert/remove |
 | **ObjectPool** | Pre-allocated order nodes | O(1) alloc/free |
 | **PriceLevel** | Orders + cached aggregate quantity | O(1) quantity query |
@@ -111,7 +114,7 @@ The React frontend (`/frontend`) provides a real-time market-operations interfac
 mercury/
 ├── include/                    # Headers
 │   ├── Order.h                 # Order, Trade, ExecutionResult types
-│   ├── OrderBook.h             # Order book with custom data structures
+│   ├── OrderBook.h             # Order book with Abseil ladders + intrusive FIFO levels
 │   ├── MatchingEngine.h        # Price-time priority matching
 │   ├── EngineService.h         # Live engine thread + telemetry
 │   ├── MarketRuntime.h         # Unified simulation/runtime layer
@@ -145,6 +148,8 @@ mercury/
 cmake -B build -G Ninja
 cmake --build build
 ```
+
+The backend pulls third-party dependencies with CMake `FetchContent`, including Abseil for the ladder and lookup containers.
 
 ### Run The Live Stack
 
@@ -321,7 +326,7 @@ cmake --build build
 - Trading strategies and legacy migration coverage
 - Concurrency (thread pool, async writers)
 - Stress tests (100K+ orders, deep books)
-- Custom data structures (HashMap, IntrusiveList)
+- Core data structures and container behavior
 
 ```powershell
 # Backend

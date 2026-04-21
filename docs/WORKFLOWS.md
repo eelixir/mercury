@@ -137,6 +137,12 @@ If you touch any of these, update all affected docs in the same pass:
 
 Do not document dependency managers that the repo does not use. The current backend dependency model is CMake `FetchContent`.
 
+If you change core containers, keep the docs aligned with the current implementation:
+
+- `absl::btree_map` for sorted bid and ask ladders
+- the repository `HashMap` wrapper backed by `absl::flat_hash_map` for O(1) average lookup
+- intrusive FIFO queues inside each price level, not `std::deque`
+
 ## 5. Updating Documentation
 
 Documentation in this repo should describe the current state, not the hoped-for future state.

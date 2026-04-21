@@ -1,4 +1,5 @@
 #include "MatchingEngine.h"
+#include "BenchTiming.h"
 #include "PriceLevel.h"
 #include <algorithm>
 #include <chrono>
@@ -25,7 +26,7 @@ namespace Mercury {
 
         // Check for duplicate order ID (for new orders, not cancel/modify)
         if (order.orderType == OrderType::Limit || order.orderType == OrderType::Market) {
-            if (orderBook_.getOrder(order.id).has_value()) {
+            if (orderBook_.hasOrder(order.id)) {
                 auto result = ExecutionResult::makeRejection(order.id, RejectReason::DuplicateOrderId);
                 notifyExecution(result);
                 return result;
@@ -191,20 +192,21 @@ namespace Mercury {
         }
 
         // Try to get the order first to verify it exists
-        auto existingOrder = orderBook_.getOrder(orderId);
-        if (!existingOrder.has_value()) {
+        OrderNode* existingOrder = orderBook_.getOrderNode(orderId);
+        if (!existingOrder) {
             return ExecutionResult::makeRejection(orderId, RejectReason::OrderNotFound);
         }
 
-        Side side = existingOrder->side;
-        int64_t price = existingOrder->price;
+        const Side side = existingOrder->side;
+        const int64_t price = existingOrder->price;
+        const uint64_t remainingQuantity = existingOrder->quantity;
 
         // Remove the order
-        orderBook_.removeOrder(orderId);
+        orderBook_.removeOrder(existingOrder);
         notifyBookMutation(side, price, BookDeltaAction::Remove);
 
         result.status = ExecutionStatus::Cancelled;
-        result.remainingQuantity = existingOrder->quantity;
+        result.remainingQuantity = remainingQuantity;
         result.message = "Order cancelled successfully";
 
         return result;
@@ -234,14 +236,14 @@ namespace Mercury {
         }
 
         // Get the existing order
-        auto existingOrder = orderBook_.getOrder(orderId);
-        if (!existingOrder.has_value()) {
+        OrderNode* existingOrder = orderBook_.getOrderNode(orderId);
+        if (!existingOrder) {
             return ExecutionResult::makeRejection(orderId, RejectReason::OrderNotFound);
         }
 
-        Order modifiedOrder = existingOrder.value();
-        Side originalSide = modifiedOrder.side;
-        int64_t originalPrice = modifiedOrder.price;
+        Order modifiedOrder = existingOrder->toOrder();
+        const Side originalSide = modifiedOrder.side;
+        const int64_t originalPrice = modifiedOrder.price;
 
         // Check if there are actual changes
         bool hasChanges = false;
@@ -262,7 +264,7 @@ namespace Mercury {
         }
 
         // Remove the original order
-        orderBook_.removeOrder(orderId);
+        orderBook_.removeOrder(existingOrder);
         notifyBookMutation(originalSide, originalPrice, BookDeltaAction::Remove);
 
         // Re-submit with new timestamp (loses time priority)
@@ -371,62 +373,67 @@ namespace Mercury {
 
         // Collect order IDs to process (we can't modify list while iterating)
         // Using a small vector to avoid allocations for typical cases
-        std::vector<uint64_t> ordersToProcess;
+        std::vector<OrderNode*> ordersToProcess;
         ordersToProcess.reserve(std::min(level->size(), size_t(32)));
 
-        for (const auto& restingNode : *level) {
-            if (order.quantity == 0) break;
-            
-            // Self-trade prevention: skip if same client ID
-            if (order.clientId != 0 && order.clientId == restingNode.clientId) {
-                continue;
+        {
+            MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::PriceLevelIteration);
+            for (auto& restingNode : *level) {
+                if (order.quantity == 0) break;
+
+                // Self-trade prevention: skip if same client ID
+                if (order.clientId != 0 && order.clientId == restingNode.clientId) {
+                    continue;
+                }
+
+                ordersToProcess.push_back(&restingNode);
             }
-            
-            ordersToProcess.push_back(restingNode.id);
         }
 
         // Now process the collected orders
-        for (uint64_t restingOrderId : ordersToProcess) {
+        for (OrderNode* restingOrder : ordersToProcess) {
             if (order.quantity == 0) break;
-
-            // Re-fetch the order (it may have been partially filled)
-            auto restingOrderOpt = orderBook_.getOrder(restingOrderId);
-            if (!restingOrderOpt) continue;  // Order was removed
-
-            const Order& restingOrder = *restingOrderOpt;
+            if (!restingOrder || restingOrder->id == 0 || restingOrder->quantity == 0) {
+                continue;
+            }
 
             // Calculate fill quantity (with overflow protection)
-            uint64_t fillQty = std::min(order.quantity, restingOrder.quantity);
+            const uint64_t restingQuantity = restingOrder->quantity;
+            const uint64_t fillQty = std::min(order.quantity, restingQuantity);
             
             // Edge case: zero fill (shouldn't happen)
             if (fillQty == 0) continue;
 
-            // Create trade record
-            Trade trade;
-            trade.tradeId = generateTradeId();
-            trade.price = priceLevel;
-            trade.quantity = fillQty;
-            trade.timestamp = getTimestamp();
+            {
+                MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::CallbackResult);
 
-            if (order.side == Side::Buy) {
-                trade.buyOrderId = order.id;
-                trade.sellOrderId = restingOrder.id;
-                trade.buyClientId = order.clientId;
-                trade.sellClientId = restingOrder.clientId;
-            } else {
-                trade.buyOrderId = restingOrder.id;
-                trade.sellOrderId = order.id;
-                trade.buyClientId = restingOrder.clientId;
-                trade.sellClientId = order.clientId;
-            }
+                // Create trade record
+                Trade trade;
+                trade.tradeId = generateTradeId();
+                trade.price = priceLevel;
+                trade.quantity = fillQty;
+                trade.timestamp = getTimestamp();
 
-            trades.push_back(trade);
-            notifyTrade(trade);
+                if (order.side == Side::Buy) {
+                    trade.buyOrderId = order.id;
+                    trade.sellOrderId = restingOrder->id;
+                    trade.buyClientId = order.clientId;
+                    trade.sellClientId = restingOrder->clientId;
+                } else {
+                    trade.buyOrderId = restingOrder->id;
+                    trade.sellOrderId = order.id;
+                    trade.buyClientId = restingOrder->clientId;
+                    trade.sellClientId = order.clientId;
+                }
 
-            // Update statistics (with overflow protection)
-            tradeCount_++;
-            if (totalVolume_ <= std::numeric_limits<uint64_t>::max() - fillQty) {
-                totalVolume_ += fillQty;
+                trades.push_back(trade);
+                notifyTrade(trade);
+
+                // Update statistics (with overflow protection)
+                tradeCount_++;
+                if (totalVolume_ <= std::numeric_limits<uint64_t>::max() - fillQty) {
+                    totalVolume_ += fillQty;
+                }
             }
 
             // Update quantities
@@ -434,15 +441,15 @@ namespace Mercury {
             totalFilled += fillQty;
 
             // Update or remove the resting order
-            if (fillQty == restingOrder.quantity) {
+            if (fillQty == restingQuantity) {
                 // Fully filled - remove from book
-                orderBook_.removeOrder(restingOrder.id);
-                notifyBookMutation(restingOrder.side, priceLevel, BookDeltaAction::Remove);
+                const Side restingSide = restingOrder->side;
+                orderBook_.removeOrder(restingOrder);
+                notifyBookMutation(restingSide, priceLevel, BookDeltaAction::Remove);
             } else {
                 // Partially filled - update quantity
-                orderBook_.updateOrderQuantity(restingOrder.id, 
-                    restingOrder.quantity - fillQty);
-                notifyBookMutation(restingOrder.side, priceLevel, BookDeltaAction::Upsert);
+                orderBook_.updateOrderQuantity(restingOrder, restingQuantity - fillQty);
+                notifyBookMutation(restingOrder->side, priceLevel, BookDeltaAction::Upsert);
             }
         }
 
@@ -485,14 +492,17 @@ namespace Mercury {
             }
             
             const auto& askLevels = orderBook_.getAskLevels();
-            for (const auto& [price, level] : askLevels) {
-                if (!isPriceAcceptable(order, price)) break;
-                
-                for (const auto& node : level) {
-                    if (remainingQty <= node.quantity) {
-                        return true;  // Can fill completely
+            {
+                MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::PriceLevelIteration);
+                for (const auto& [price, level] : askLevels) {
+                    if (!isPriceAcceptable(order, price)) break;
+
+                    for (const auto& node : level) {
+                        if (remainingQty <= node.quantity) {
+                            return true;  // Can fill completely
+                        }
+                        remainingQty -= node.quantity;
                     }
-                    remainingQty -= node.quantity;
                 }
             }
         } else {
@@ -502,14 +512,17 @@ namespace Mercury {
             }
             
             const auto& bidLevels = orderBook_.getBidLevels();
-            for (const auto& [price, level] : bidLevels) {
-                if (!isPriceAcceptable(order, price)) break;
-                
-                for (const auto& node : level) {
-                    if (remainingQty <= node.quantity) {
-                        return true;  // Can fill completely
+            {
+                MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::PriceLevelIteration);
+                for (const auto& [price, level] : bidLevels) {
+                    if (!isPriceAcceptable(order, price)) break;
+
+                    for (const auto& node : level) {
+                        if (remainingQty <= node.quantity) {
+                            return true;  // Can fill completely
+                        }
+                        remainingQty -= node.quantity;
                     }
-                    remainingQty -= node.quantity;
                 }
             }
         }
@@ -534,11 +547,15 @@ namespace Mercury {
             return;
         }
 
+        const uint64_t quantity = orderBook_.getQuantityAtPrice(price, side);
+        const size_t orderCount = orderBook_.getOrderCountAtPrice(price, side);
+
+        MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::CallbackResult);
         BookMutation mutation;
         mutation.side = side;
         mutation.price = price;
-        mutation.quantity = orderBook_.getQuantityAtPrice(price, side);
-        mutation.orderCount = orderBook_.getOrderCountAtPrice(price, side);
+        mutation.quantity = quantity;
+        mutation.orderCount = orderCount;
         mutation.action = (mutation.quantity == 0 || mutation.orderCount == 0)
             ? BookDeltaAction::Remove
             : action;

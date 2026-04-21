@@ -1,5 +1,7 @@
 #pragma once
 
+#include "BenchTiming.h"
+
 #include <cstddef>
 #include <iterator>
 #include <type_traits>
@@ -185,6 +187,7 @@ namespace Mercury {
 
         // Modifiers
         void push_front(T* node) {
+            MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::IntrusiveList);
             node->prev = nullptr;
             node->next = head_;
 
@@ -198,6 +201,7 @@ namespace Mercury {
         }
 
         void push_back(T* node) {
+            MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::IntrusiveList);
             node->prev = tail_;
             node->next = nullptr;
 
@@ -211,6 +215,7 @@ namespace Mercury {
         }
 
         void pop_front() {
+            MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::IntrusiveList);
             if (!head_) return;
 
             T* old_head = head_;
@@ -228,6 +233,7 @@ namespace Mercury {
         }
 
         void pop_back() {
+            MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::IntrusiveList);
             if (!tail_) return;
 
             T* old_tail = tail_;
@@ -246,6 +252,7 @@ namespace Mercury {
 
         // Remove a specific node - O(1) since node knows its neighbors
         void remove(T* node) {
+            MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::IntrusiveList);
             if (!node) return;
 
             if (node->prev) {
@@ -267,6 +274,7 @@ namespace Mercury {
 
         // Insert after a given node
         void insert_after(T* pos, T* node) {
+            MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::IntrusiveList);
             if (!pos) {
                 push_front(node);
                 return;
@@ -286,6 +294,7 @@ namespace Mercury {
 
         // Insert before a given node
         void insert_before(T* pos, T* node) {
+            MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::IntrusiveList);
             if (!pos) {
                 push_back(node);
                 return;

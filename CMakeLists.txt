@@ -87,6 +87,13 @@ FetchContent_Declare(
     GIT_TAG        v3.12.0
 )
 
+set(ABSL_PROPAGATE_CXX_STD ON CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    abseil_cpp
+    GIT_REPOSITORY https://github.com/abseil/abseil-cpp.git
+    GIT_TAG        20240116.2
+)
+
 set(LIBUV_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(LIBUV_BUILD_BENCH OFF CACHE BOOL "" FORCE)
 set(LIBUV_BUILD_SHARED OFF CACHE BOOL "" FORCE)
@@ -113,6 +120,7 @@ endif()
 
 FetchContent_MakeAvailable(googletest)
 FetchContent_MakeAvailable(nlohmann_json)
+FetchContent_MakeAvailable(abseil_cpp)
 if(MERCURY_BUILD_SERVER)
     FetchContent_MakeAvailable(libuv)
 
@@ -189,6 +197,7 @@ endif()
 # Include the src and include directories so headers can be found easily
 target_include_directories(mercury PUBLIC src include)
 target_link_libraries(mercury PRIVATE Threads::Threads nlohmann_json::nlohmann_json)
+target_link_libraries(mercury PRIVATE absl::flat_hash_map absl::btree)
 if(MERCURY_BUILD_SERVER)
     target_link_libraries(mercury PRIVATE uwebsockets)
 endif()
@@ -199,6 +208,7 @@ add_library(mercury_lib
 )
 target_include_directories(mercury_lib PUBLIC include)
 target_link_libraries(mercury_lib PUBLIC Threads::Threads)
+target_link_libraries(mercury_lib PUBLIC absl::flat_hash_map absl::btree)
 
 # Header-only components (listed for IDE visibility)
 set(MERCURY_HEADERS
