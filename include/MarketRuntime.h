@@ -62,7 +62,7 @@ namespace Mercury {
         size_t marketMakerCount = 2;
         size_t momentumCount = 2;
         size_t meanReversionCount = 2;
-        uint64_t stepMs = 100;
+        uint64_t stepMs = 50;
         uint64_t publishIntervalMs = 250;
         uint64_t headlessDurationMs = 30000;
     };

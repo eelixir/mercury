@@ -175,6 +175,34 @@ TEST(SimulationRuntimeTest, MaintainsTwoSidedBookAndKeepsTradingOverLongRun) {
     EXPECT_GT(lateState.tradeCount, midRunState.tradeCount);
 }
 
+TEST(SimulationRuntimeTest, TradeCountAdvancesAcrossMostCheckpointWindows) {
+    auto config = makeSimConfig();
+    config.speed = 500.0;
+    config.stepMs = 100;
+
+    MarketRuntime runtime("SIM", config);
+    runtime.start();
+
+    uint64_t previousTradeCount = 0;
+    int advancingWindows = 0;
+
+    for (uint64_t targetMs : {3000ULL, 6000ULL, 9000ULL, 12000ULL, 15000ULL, 18000ULL}) {
+        ASSERT_TRUE(waitUntil([&]() {
+            return runtime.getState().simulationTimestamp >= targetMs;
+        }, 4000));
+
+        const auto state = runtime.getState();
+        if (state.tradeCount > previousTradeCount) {
+            ++advancingWindows;
+        }
+        previousTradeCount = state.tradeCount;
+    }
+
+    runtime.stop();
+
+    EXPECT_GE(advancingWindows, 5);
+}
+
 TEST(SimulationRuntimeTest, VolatilityPresetsStayWithinReasonableExcursionBounds) {
     auto config = makeSimConfig();
     config.speed = 500.0;

@@ -71,6 +71,21 @@ namespace Mercury {
             return 100;
         }
 
+        double topLevelImbalance(const SimulationObservation& observation) {
+            if (observation.snapshot.bids.empty() || observation.snapshot.asks.empty()) {
+                return 0.0;
+            }
+
+            const double bidQty = static_cast<double>(observation.snapshot.bids.front().quantity);
+            const double askQty = static_cast<double>(observation.snapshot.asks.front().quantity);
+            const double totalQty = bidQty + askQty;
+            if (totalQty <= 0.0) {
+                return 0.0;
+            }
+
+            return (bidQty - askQty) / totalQty;
+        }
+
         class PassiveMarketMakerAgent final : public SimulationAgent {
         public:
             explicit PassiveMarketMakerAgent(SimulationVolatilityPreset preset)
@@ -80,10 +95,10 @@ namespace Mercury {
 
             uint64_t wakeIntervalMs() const override {
                 switch (preset_) {
-                    case SimulationVolatilityPreset::Low: return 220;
-                    case SimulationVolatilityPreset::High: return 90;
+                    case SimulationVolatilityPreset::Low: return 170;
+                    case SimulationVolatilityPreset::High: return 70;
                     case SimulationVolatilityPreset::Normal:
-                    default: return 140;
+                    default: return 95;
                 }
             }
 
@@ -176,10 +191,10 @@ namespace Mercury {
 
             uint64_t wakeIntervalMs() const override {
                 switch (preset_) {
-                    case SimulationVolatilityPreset::Low: return 260;
-                    case SimulationVolatilityPreset::High: return 75;
+                    case SimulationVolatilityPreset::Low: return 220;
+                    case SimulationVolatilityPreset::High: return 60;
                     case SimulationVolatilityPreset::Normal:
-                    default: return 140;
+                    default: return 100;
                 }
             }
 
@@ -197,26 +212,81 @@ namespace Mercury {
 
                 const auto params = paramsForPreset(preset_);
                 const int64_t shortMove = mids_.back() - mids_.front();
+                const double imbalance = topLevelImbalance(observation);
+                const int64_t fair = observation.environment.latentFairValue > 0
+                    ? observation.environment.latentFairValue
+                    : reference;
+                const int64_t buyEdge = observation.snapshot.bestAsk
+                    ? (fair - *observation.snapshot.bestAsk)
+                    : 0;
+                const int64_t sellEdge = observation.snapshot.bestBid
+                    ? (*observation.snapshot.bestBid - fair)
+                    : 0;
+
                 int direction = 0;
+                bool burstDriven = false;
+                bool probeDriven = false;
                 if (observation.environment.momentumBurst) {
                     direction = observation.environment.momentumDirection;
-                } else if (std::abs(shortMove) >= static_cast<int64_t>(2 + params.topFragility * 2.0)) {
+                    burstDriven = true;
+                } else if (std::abs(shortMove) >= 1) {
                     direction = shortMove > 0 ? 1 : -1;
+                } else if (buyEdge >= 1 && imbalance > -0.30) {
+                    direction = 1;
+                } else if (sellEdge >= 1 && imbalance < 0.30) {
+                    direction = -1;
+                } else if (std::abs(imbalance) >= 0.22) {
+                    direction = imbalance > 0.0 ? 1 : -1;
+                }
+
+                const uint64_t nowMs = observation.environment.simulationTimestamp;
+                if (direction == 0) {
+                    const uint64_t probeCooldownMs =
+                        preset_ == SimulationVolatilityPreset::High ? 180 :
+                        preset_ == SimulationVolatilityPreset::Low ? 420 : 280;
+                    if (nowMs >= lastAggressionTimestampMs_ + probeCooldownMs) {
+                        if (std::abs(imbalance) >= 0.10) {
+                            direction = imbalance > 0.0 ? 1 : -1;
+                            probeDriven = true;
+                        } else if (observation.snapshot.bestBid.has_value() &&
+                                   observation.snapshot.bestAsk.has_value()) {
+                            direction = ((nowMs / probeCooldownMs) % 2 == 0) ? 1 : -1;
+                            probeDriven = true;
+                        }
+                    }
                 }
 
                 if (direction == 0) {
                     return {};
                 }
 
+                const uint64_t cooldownMs = burstDriven
+                    ? (preset_ == SimulationVolatilityPreset::High ? 60 : 90)
+                    : (preset_ == SimulationVolatilityPreset::Low ? 220 : 130);
+                if (nowMs < lastAggressionTimestampMs_ + cooldownMs) {
+                    return {};
+                }
+
+                const uint64_t baseQty = burstDriven
+                    ? params.momentumBaseQty
+                    : probeDriven
+                        ? std::max<uint64_t>(3, params.momentumBaseQty / 4)
+                        : std::max<uint64_t>(4, params.momentumBaseQty / 3);
+                const uint64_t maxQty = burstDriven
+                    ? params.momentumMaxQty
+                    : probeDriven
+                        ? std::max<uint64_t>(baseQty + 2, params.momentumMaxQty / 5)
+                        : std::max<uint64_t>(baseQty + 6, params.momentumMaxQty / 3);
                 const uint64_t qty = std::min<uint64_t>(
-                    params.momentumMaxQty,
-                    params.momentumBaseQty + static_cast<uint64_t>(std::abs(shortMove)) * 2);
+                    maxQty,
+                    baseQty + static_cast<uint64_t>(std::abs(shortMove)) * (burstDriven ? 2ULL : 1ULL));
 
                 if ((direction > 0 && !observation.snapshot.bestAsk.has_value()) ||
                     (direction < 0 && !observation.snapshot.bestBid.has_value())) {
                     return {};
                 }
 
+                lastAggressionTimestampMs_ = nowMs;
                 return {OrderIntent{
                     OrderIntentKind::PlaceMarket,
                     direction > 0 ? Side::Buy : Side::Sell,
@@ -233,6 +303,7 @@ namespace Mercury {
         private:
             SimulationVolatilityPreset preset_;
             std::deque<int64_t> mids_;
+            uint64_t lastAggressionTimestampMs_ = 0;
         };
 
         class MeanReversionAgent final : public SimulationAgent {
@@ -244,10 +315,10 @@ namespace Mercury {
 
             uint64_t wakeIntervalMs() const override {
                 switch (preset_) {
-                    case SimulationVolatilityPreset::Low: return 300;
-                    case SimulationVolatilityPreset::High: return 150;
+                    case SimulationVolatilityPreset::Low: return 240;
+                    case SimulationVolatilityPreset::High: return 110;
                     case SimulationVolatilityPreset::Normal:
-                    default: return 220;
+                    default: return 160;
                 }
             }
 
@@ -261,9 +332,13 @@ namespace Mercury {
 
                 const auto deviation = reference - fair;
                 const auto params = paramsForPreset(preset_);
-                const int64_t threshold = static_cast<int64_t>(3 + params.topFragility * 2.0);
+                const int64_t threshold = static_cast<int64_t>(2 + params.topFragility);
                 const auto* liveBid = findOrderBySide(observation.liveOrders, Side::Buy);
                 const auto* liveAsk = findOrderBySide(observation.liveOrders, Side::Sell);
+                const uint64_t nowMs = observation.environment.simulationTimestamp;
+                const bool canAggress =
+                    nowMs >= lastAggressionTimestampMs_ +
+                        (preset_ == SimulationVolatilityPreset::High ? 110 : 170);
 
                 if (std::abs(deviation) < threshold) {
                     if (liveBid) {
@@ -277,6 +352,14 @@ namespace Mercury {
 
                 const uint64_t qty = params.meanReversionBaseQty + static_cast<uint64_t>(std::abs(deviation));
                 if (deviation > 0) {
+                    if (canAggress && std::abs(deviation) >= threshold * 2 && observation.snapshot.bestBid.has_value()) {
+                        lastAggressionTimestampMs_ = nowMs;
+                        intents.push_back(OrderIntent{
+                            OrderIntentKind::PlaceLimit, Side::Sell, *observation.snapshot.bestBid,
+                            std::max<uint64_t>(8, qty / 2), TimeInForce::IOC
+                        });
+                    }
+
                     const int64_t price = std::max<int64_t>(1, fair + 1);
                     if (liveAsk) {
                         intents.push_back(OrderIntent{
@@ -292,6 +375,14 @@ namespace Mercury {
                         intents.push_back(OrderIntent{OrderIntentKind::Cancel, Side::Buy, 0, 0, TimeInForce::GTC, liveBid->orderId});
                     }
                 } else {
+                    if (canAggress && std::abs(deviation) >= threshold * 2 && observation.snapshot.bestAsk.has_value()) {
+                        lastAggressionTimestampMs_ = nowMs;
+                        intents.push_back(OrderIntent{
+                            OrderIntentKind::PlaceLimit, Side::Buy, *observation.snapshot.bestAsk,
+                            std::max<uint64_t>(8, qty / 2), TimeInForce::IOC
+                        });
+                    }
+
                     const int64_t price = std::max<int64_t>(1, fair - 1);
                     if (liveBid) {
                         intents.push_back(OrderIntent{
@@ -313,6 +404,7 @@ namespace Mercury {
 
         private:
             SimulationVolatilityPreset preset_;
+            uint64_t lastAggressionTimestampMs_ = 0;
         };
 
         template <typename T>
@@ -768,7 +860,8 @@ namespace Mercury {
 
         switch (order.orderType) {
             case OrderType::Limit:
-                if ((result.status == ExecutionStatus::Resting || result.status == ExecutionStatus::PartialFill) &&
+                if ((result.status == ExecutionStatus::Resting ||
+                     (result.status == ExecutionStatus::PartialFill && order.tif != TimeInForce::IOC)) &&
                     result.remainingQuantity > 0) {
                     upsertLiveOrder(order.id, order.side, order.price, result.remainingQuantity, order.clientId);
                 } else {
@@ -836,28 +929,40 @@ namespace Mercury {
     }
 
     void MarketRuntime::maybeWakeAgents() {
+        uint64_t currentSimTime = 0;
+        {
+            std::lock_guard<std::mutex> stateLock(stateMutex_);
+            currentSimTime = simulationTimestampMs_;
+        }
+
         std::lock_guard<std::mutex> agentsLock(agentsMutex_);
 
         for (auto& slot : agents_) {
-            if (simulationTimestampMs_ < slot.nextWakeMs) {
-                continue;
-            }
+            size_t catchUpWakes = 0;
+            while (currentSimTime >= slot.nextWakeMs && catchUpWakes < 3) {
+                auto observation = buildObservation(slot.clientId);
+                auto intents = slot.agent->onWake(observation);
+                for (const auto& intent : intents) {
+                    if (intent.kind == OrderIntentKind::None) {
+                        continue;
+                    }
 
-            auto observation = buildObservation(slot.clientId);
-            auto intents = slot.agent->onWake(observation);
-            for (const auto& intent : intents) {
-                if (intent.kind == OrderIntentKind::None) {
-                    continue;
+                    auto order = translateIntent(intent, slot.clientId);
+                    auto result = engineService_->submitOrder(order);
+                    applyExecutionToLiveOrders(order, result);
                 }
 
-                auto order = translateIntent(intent, slot.clientId);
-                auto result = engineService_->submitOrder(order);
-                applyExecutionToLiveOrders(order, result);
+                const uint64_t baseWake = std::max<uint64_t>(1, slot.agent->wakeIntervalMs());
+                std::uniform_int_distribution<uint64_t> dist(0, baseWake / 3 + 1);
+                slot.nextWakeMs += baseWake + dist(rng_);
+                ++catchUpWakes;
             }
 
-            const uint64_t baseWake = slot.agent->wakeIntervalMs();
-            std::uniform_int_distribution<uint64_t> dist(0, baseWake / 3 + 1);
-            slot.nextWakeMs = simulationTimestampMs_ + baseWake + dist(rng_);
+            if (currentSimTime >= slot.nextWakeMs) {
+                const uint64_t baseWake = std::max<uint64_t>(1, slot.agent->wakeIntervalMs());
+                std::uniform_int_distribution<uint64_t> dist(baseWake / 4, baseWake / 2 + 1);
+                slot.nextWakeMs = currentSimTime + dist(rng_);
+            }
         }
     }
 
