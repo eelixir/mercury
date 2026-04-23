@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(npm run *)",
-      "Bash(cmake --build . --target mercury_tests -j)"
-    ]
-  }
-}
