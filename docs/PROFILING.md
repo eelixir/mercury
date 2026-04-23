@@ -159,33 +159,6 @@ Mercury includes thread-safe primitives for parallel processing:
 - **API:** RAII guard via `SpinLockGuard`
 - **Benefits:** Lower overhead than mutex for micro-contention
 
-### AsyncWriter
-- **Location:** `include/AsyncWriter.h`
-- **Use:** Background file I/O with buffering
-- **API:** `write()` queues data, background thread flushes
-- **Benefits:** Decouples I/O latency from processing path
-
-### ConcurrentQueue
-- **Location:** `include/AsyncWriter.h`
-- **Use:** Thread-safe producer/consumer queue
-- **API:** `push()`, `pop()` with blocking, `tryPop()` non-blocking
-- **Benefits:** Bounded size option prevents memory exhaustion
-
-### ConcurrentMatchingEngine
-- **Location:** `include/ConcurrentMatchingEngine.h`
-- **Use:** Thread-safe matching with multiple strategies
-- **Modes:**
-  - `SingleThreaded`: Traditional sequential processing
-  - `SymbolSharded`: Parallel order books per symbol/client
-  - `AsyncCallbacks`: Single-threaded matching, async post-trade
-- **Benefits:** Scales with multi-symbol workloads
-
-### PostTradeProcessor
-- **Location:** `include/ConcurrentMatchingEngine.h`
-- **Use:** Offloads P&L/risk updates to background threads
-- **API:** `processTrade()`, `setTradeHandler()`
-- **Benefits:** Keeps matching engine fast, async post-trade work
-
 ---
 
 ## Strategy Components
@@ -221,29 +194,17 @@ Mercury includes a strategy layer for developing and testing trading algorithms:
 
 For detailed strategy documentation, see [STRATEGIES.md](STRATEGIES.md).
 
-## Running Demos and Strategies
+## Running the Simulation
 
 ```bash
-# Run interactive demo
-./build/mercury
+# Run the accelerated headless simulation
+./build/mercury --headless --sim-duration-ms 30000
 
-# Run strategy simulation (market making + momentum)
-./build/mercury --strategies
-```
+# Tune the agent mix
+./build/mercury --headless --mm-count 3 --mom-count 2 --mr-count 2 --noise-count 4
 
----
-
-### Running with Concurrency
-
-```bash
-# Enable parallel CSV parsing and async post-trade processing
-./build/mercury data/sample_orders.csv --concurrent
-
-# Enable async file I/O writers
-./build/mercury data/sample_orders.csv --async-io
-
-# Both options for maximum parallelism
-./build/mercury data/sample_orders.csv --concurrent --async-io
+# Live server mode (HTTP/WebSocket on 127.0.0.1:9001)
+./build/mercury --server
 ```
 
 ---

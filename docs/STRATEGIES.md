@@ -43,15 +43,16 @@ Mercury's strategy layer provides:
 
 ## Quick Start
 
-### Running Built-in Strategies
+### Running the Simulation
 
 ```bash
 # Build Mercury
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 
-# Run strategy simulation demo
-./build/mercury --strategies
+# Run the unified market simulation (agents include market makers,
+# momentum traders, mean-reversion bots, and Poisson noise flow)
+./build/mercury --headless --sim-duration-ms 30000
 ```
 
 ### Basic Usage in Code
@@ -631,7 +632,6 @@ TEST(MomentumStrategyTest, GeneratesBuySignalOnUptrend) {
 
 ```cpp
 #include "StrategyManager.h"
-#include "StrategyDemo.h"
 
 int main() {
     MatchingEngine engine;

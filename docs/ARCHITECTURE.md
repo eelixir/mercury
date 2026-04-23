@@ -58,8 +58,6 @@ Simulation and server flags:
 - `--noise-count <n>` (Poisson-flow noise traders)
 - `--sim-duration-ms <n>`
 
-Legacy `--strategies` and `--backtest` flags still exist for migration safety, but the intended architecture is the unified runtime above the engine.
-
 ## Core Engine Layer
 
 ### Order Model

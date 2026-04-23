@@ -227,15 +227,10 @@ set(MERCURY_HEADERS
     include/RiskManager.h
     include/PnLTracker.h
     include/ThreadPool.h
-    include/AsyncWriter.h
-    include/ConcurrentMatchingEngine.h
     include/Strategy.h
     include/MarketMakingStrategy.h
     include/MomentumStrategy.h
     include/StrategyManager.h
-    include/StrategyDemo.h
-    include/Backtester.h
-    include/BacktestDemo.h
     include/MarketData.h
     include/MarketDataPublisher.h
     include/MarketRuntime.h
@@ -260,7 +255,6 @@ add_executable(mercury_tests
     tests/stress_test.cpp
     tests/risk_manager_test.cpp
     tests/pnl_tracker_test.cpp
-    tests/concurrency_test.cpp
     tests/simulation_runtime_test.cpp
     tests/strategy_test.cpp
     tests/regime_manager_test.cpp

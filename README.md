@@ -80,7 +80,6 @@ The core book keeps intrusive FIFO queues inside each price level while using `a
 | **ObjectPool** | Pre-allocated order nodes | O(1) alloc/free |
 | **PriceLevel** | Orders + cached aggregate quantity | O(1) quantity query |
 | **ThreadPool** | Task scheduling for parallel work | O(1) submit |
-| **AsyncWriter** | Background I/O with buffering | Lock-free fast path |
 
 ### Server Components
 
@@ -304,10 +303,6 @@ All fields are little-endian (x86/x64 host order).
 | `--mr-count <n>` | | Mean-reversion-agent count |
 | `--noise-count <n>` | | Poisson-flow noise-trader count |
 | `--sim-duration-ms <n>` | | Bounded headless run duration in simulated milliseconds |
-| `--strategies` | `-s` | Route legacy strategy demos through the unified runtime |
-| `--backtest` | `-b` | Route legacy backtests through the unified runtime |
-| `--concurrent` | `-c` | Enable concurrent processing |
-| `--async-io` | `-a` | Enable async file I/O |
 
 ## Performance
 
