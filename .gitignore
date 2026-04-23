@@ -51,3 +51,12 @@ googletest/
 
 # Logs
 *.log
+
+# Claude
+
+# Codex
+.codex-run/
+
+# Claude AI
+AGENTS.md
+.claude/
