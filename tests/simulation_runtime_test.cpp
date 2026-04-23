@@ -175,6 +175,51 @@ TEST(SimulationRuntimeTest, MaintainsTwoSidedBookAndKeepsTradingOverLongRun) {
     EXPECT_GT(lateState.tradeCount, midRunState.tradeCount);
 }
 
+TEST(SimulationRuntimeTest, MarketMakersMaintainDeeperQuotedLevels) {
+    auto config = makeSimConfig();
+    config.momentumCount = 0;
+    config.meanReversionCount = 0;
+    config.noiseTraderCount = 0;
+    config.speed = 100.0;
+
+    MarketRuntime runtime("SIM", config);
+    runtime.start();
+
+    ASSERT_TRUE(waitUntil([&]() {
+        const auto snapshot = runtime.getSnapshot(10);
+        return snapshot.bids.size() >= 2 && snapshot.asks.size() >= 2;
+    }, 3000));
+
+    const auto snapshot = runtime.getSnapshot(10);
+    runtime.stop();
+
+    EXPECT_GE(snapshot.bids.size(), 2u);
+    EXPECT_GE(snapshot.asks.size(), 2u);
+    EXPECT_GT(snapshot.bids.front().quantity, snapshot.bids[1].quantity);
+    EXPECT_GT(snapshot.asks.front().quantity, snapshot.asks[1].quantity);
+}
+
+TEST(SimulationRuntimeTest, PublishesBoundedToxicityScore) {
+    MarketRuntime runtime("SIM", makeSimConfig());
+    RecordingRuntimeSink sink;
+    runtime.addSubscriber(&sink);
+    runtime.start();
+
+    ASSERT_TRUE(waitUntil([&]() {
+        std::lock_guard<std::mutex> lock(sink.mutex);
+        return !sink.simStates.empty();
+    }));
+
+    runtime.stop();
+
+    std::lock_guard<std::mutex> lock(sink.mutex);
+    ASSERT_FALSE(sink.simStates.empty());
+    for (const auto& state : sink.simStates) {
+        EXPECT_GE(state.toxicityScore, 0.0);
+        EXPECT_LE(state.toxicityScore, 1.0);
+    }
+}
+
 TEST(SimulationRuntimeTest, TradeCountAdvancesAcrossMostCheckpointWindows) {
     auto config = makeSimConfig();
     config.speed = 500.0;

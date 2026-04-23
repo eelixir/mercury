@@ -63,6 +63,7 @@ interface MarketDataState {
   activeSymbol: string
   symbols: string[]
   bySymbol: Record<string, SymbolBucket>
+  streamSequence: number
   connectionState: ConnectionState
   activeClientId: number
   lastOrderResponse: OrderResponse | null
@@ -109,6 +110,7 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
   activeSymbol: 'SIM',
   symbols: ['SIM'],
   bySymbol: { SIM: newBucket() },
+  streamSequence: 0,
   connectionState: 'connecting',
   activeClientId: 1,
   lastOrderResponse: null,
@@ -141,6 +143,7 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
       activeSymbol: 'SIM',
       symbols: ['SIM'],
       bySymbol: { SIM: newBucket() },
+      streamSequence: 0,
       connectionState: 'connecting',
       activeClientId: 1,
       lastOrderResponse: null,
@@ -151,22 +154,34 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
     if (!symbol) return false
 
     const state = get()
-    const existingBucket = state.bySymbol[symbol] ?? newBucket()
-    const currentSequence = existingBucket.sequence
+    const isStreamSequenced = envelope.type !== 'snapshot' && envelope.type !== 'sim_state'
 
     const isGap =
-      envelope.type !== 'snapshot' &&
-      envelope.type !== 'sim_state' &&
-      currentSequence !== 0 &&
-      envelope.sequence > currentSequence + 1
+      isStreamSequenced &&
+      state.streamSequence !== 0 &&
+      envelope.sequence > state.streamSequence + 1
 
     if (isGap) {
       return true
     }
 
+    const symbolSequence = state.bySymbol[symbol]?.sequence ?? 0
+    if (
+      isStreamSequenced &&
+      state.streamSequence !== 0 &&
+      envelope.sequence <= state.streamSequence &&
+      envelope.sequence <= symbolSequence
+    ) {
+      return false
+    }
+
     set((prev) => {
       const ensured = ensureSymbol(prev.symbols, prev.bySymbol, symbol)
       const bucket = ensured.bySymbol[symbol]
+      const streamSequence =
+        envelope.type === 'sim_state'
+          ? prev.streamSequence
+          : Math.max(prev.streamSequence, envelope.sequence)
 
       let activePatch: Partial<MarketDataState> | null = null
       if (prev.activeSymbol === '' || !prev.symbols.includes(prev.activeSymbol)) {
@@ -197,6 +212,7 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
 
         return {
           symbols: ensured.symbols,
+          streamSequence,
           bySymbol: updateBucket(ensured.bySymbol, symbol, {
             sequence: envelope.sequence,
             bids: envelope.payload.bids,
@@ -223,8 +239,9 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
 
         return {
           symbols: ensured.symbols,
+          streamSequence,
           bySymbol: updateBucket(ensured.bySymbol, symbol, {
-            sequence: envelope.sequence,
+            sequence: Math.max(bucket.sequence, envelope.sequence),
             bids:
               envelope.payload.side === 'buy'
                 ? upsertLevel(bucket.bids, nextLevel, true)
@@ -247,8 +264,9 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
 
         return {
           symbols: ensured.symbols,
+          streamSequence,
           bySymbol: updateBucket(ensured.bySymbol, symbol, {
-            sequence: envelope.sequence,
+            sequence: Math.max(bucket.sequence, envelope.sequence),
             trades: [envelope.payload, ...bucket.trades].slice(0, MAX_TRADES),
             ...latencyUpdate,
           }),
@@ -267,8 +285,9 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
 
         return {
           symbols: ensured.symbols,
+          streamSequence,
           bySymbol: updateBucket(ensured.bySymbol, symbol, {
-            sequence: envelope.sequence,
+            sequence: Math.max(bucket.sequence, envelope.sequence),
             stats: envelope.payload,
             chartPoints: nextPoints,
             messagesPerSecond: envelope.payload.messagesPerSecond ?? bucket.messagesPerSecond,
@@ -291,8 +310,9 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
       if (envelope.type === 'execution') {
         return {
           symbols: ensured.symbols,
+          streamSequence,
           bySymbol: updateBucket(ensured.bySymbol, symbol, {
-            sequence: envelope.sequence,
+            sequence: Math.max(bucket.sequence, envelope.sequence),
           }),
           ...(activePatch ?? {}),
         }
@@ -306,8 +326,9 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
 
       return {
         symbols: ensured.symbols,
+        streamSequence,
         bySymbol: updateBucket(ensured.bySymbol, symbol, {
-          sequence: envelope.sequence,
+          sequence: Math.max(bucket.sequence, envelope.sequence),
           pnlByClient: nextPnl,
         }),
         ...(activePatch ?? {}),

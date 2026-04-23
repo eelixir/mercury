@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { unstable_batchedUpdates } from 'react-dom'
 import type { MarketEnvelope } from '../lib/types'
 import { useMarketDataStore } from '../store/market-data-store'
 
@@ -42,8 +43,35 @@ export function useMarketDataWebSocket() {
   useEffect(() => {
     let ws: WebSocket | null = null
     let reconnectTimer: number | null = null
+    let frameTimer: number | null = null
     let attempt = 0
     let disposed = false
+    let resyncPending = false
+    let pendingEnvelopes: MarketEnvelope[] = []
+
+    const flushPending = () => {
+      frameTimer = null
+      if (disposed || pendingEnvelopes.length === 0) return
+
+      const batch = pendingEnvelopes
+      pendingEnvelopes = []
+      let needsResync = false
+
+      unstable_batchedUpdates(() => {
+        for (const envelope of batch) {
+          if (envelope.type === 'snapshot') {
+            resyncPending = false
+            needsResync = false
+          }
+          needsResync = applyEnvelope(envelope) || needsResync
+        }
+      })
+
+      if (needsResync && !resyncPending && ws && ws.readyState === WebSocket.OPEN) {
+        resyncPending = true
+        ws.send(JSON.stringify({ type: 'subscribe', depth: 20 }))
+      }
+    }
 
     const connect = () => {
       if (disposed) return
@@ -77,9 +105,9 @@ export function useMarketDataWebSocket() {
       ws.addEventListener('message', (event) => {
         try {
           const envelope = JSON.parse(String(event.data)) as MarketEnvelope
-          const needsResync = applyEnvelope(envelope)
-          if (needsResync && ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'subscribe', depth: 20 }))
+          pendingEnvelopes.push(envelope)
+          if (frameTimer === null) {
+            frameTimer = window.requestAnimationFrame(flushPending)
           }
         } catch (err) {
           console.warn('Failed to handle market message', err)
@@ -93,6 +121,9 @@ export function useMarketDataWebSocket() {
       disposed = true
       if (reconnectTimer !== null) {
         window.clearTimeout(reconnectTimer)
+      }
+      if (frameTimer !== null) {
+        window.cancelAnimationFrame(frameTimer)
       }
       if (ws) {
         try {

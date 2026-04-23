@@ -132,6 +132,53 @@ namespace Mercury {
         });
     }
 
+    std::optional<OrderBook::QueuePositionInfo> EngineService::getQueuePosition(const std::string& symbol, uint64_t orderId) {
+        if (!running_.load()) {
+            start();
+        }
+
+        if (!hasSymbol(symbol) || orderId == 0) {
+            return std::nullopt;
+        }
+
+        return invoke([this, symbol, orderId]() -> std::optional<OrderBook::QueuePositionInfo> {
+            auto it = books_.find(symbol);
+            if (it == books_.end()) {
+                return std::nullopt;
+            }
+            return it->second->engine.getOrderBook().getQueuePosition(orderId);
+        });
+    }
+
+    std::unordered_map<uint64_t, OrderBook::QueuePositionInfo> EngineService::getQueuePositions(
+        const std::string& symbol,
+        const std::vector<uint64_t>& orderIds) {
+        if (!running_.load()) {
+            start();
+        }
+
+        if (!hasSymbol(symbol) || orderIds.empty()) {
+            return {};
+        }
+
+        return invoke([this, symbol, orderIds]() {
+            std::unordered_map<uint64_t, OrderBook::QueuePositionInfo> positions;
+            auto it = books_.find(symbol);
+            if (it == books_.end()) {
+                return positions;
+            }
+
+            const auto& book = it->second->engine.getOrderBook();
+            positions.reserve(orderIds.size());
+            for (uint64_t orderId : orderIds) {
+                if (auto position = book.getQueuePosition(orderId)) {
+                    positions.emplace(orderId, *position);
+                }
+            }
+            return positions;
+        });
+    }
+
     EngineState EngineService::getState() {
         if (!running_.load()) {
             start();

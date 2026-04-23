@@ -37,6 +37,14 @@ namespace Mercury {
         using BidLevelsMap = absl::btree_map<int64_t, PriceLevel, std::greater<int64_t>>;
         using AskLevelsMap = absl::btree_map<int64_t, PriceLevel>;
 
+        struct QueuePositionInfo {
+            size_t queueIndex = 0;
+            size_t ordersAhead = 0;
+            uint64_t quantityAhead = 0;
+            size_t levelOrderCount = 0;
+            uint64_t levelQuantity = 0;
+        };
+
         // Configuration constants
         static constexpr size_t DEFAULT_ORDER_POOL_SIZE = 10000;
 
@@ -430,6 +438,56 @@ namespace Mercury {
 
         [[nodiscard]] bool hasOrder(uint64_t orderId) const {
             return orderLookup_.contains(orderId);
+        }
+
+        std::optional<QueuePositionInfo> getQueuePosition(uint64_t orderId) const {
+            if (orderId == 0) {
+                return std::nullopt;
+            }
+
+            const OrderLocation* loc = orderLookup_.find(orderId);
+            if (!loc || !loc->node) {
+                return std::nullopt;
+            }
+
+            const PriceLevel* level = nullptr;
+            if (loc->side == Side::Buy) {
+                MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::LadderMap);
+                auto it = bids_.find(loc->price);
+                if (it != bids_.end()) {
+                    level = &it->second;
+                }
+            } else {
+                MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::LadderMap);
+                auto it = asks_.find(loc->price);
+                if (it != asks_.end()) {
+                    level = &it->second;
+                }
+            }
+
+            if (!level) {
+                return std::nullopt;
+            }
+
+            QueuePositionInfo info;
+            info.levelOrderCount = level->size();
+            info.levelQuantity = level->quantity();
+
+            size_t index = 0;
+            uint64_t quantityAhead = 0;
+            for (const auto& node : *level) {
+                if (node.id == orderId) {
+                    info.queueIndex = index;
+                    info.ordersAhead = index;
+                    info.quantityAhead = quantityAhead;
+                    return info;
+                }
+
+                ++index;
+                quantityAhead += node.quantity;
+            }
+
+            return std::nullopt;
         }
 
         [[nodiscard]] int64_t getSpread() const noexcept {

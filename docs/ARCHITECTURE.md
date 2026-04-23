@@ -157,6 +157,7 @@ Environment state currently includes:
 - latent fair value
 - volatility preset and regime parameters
 - momentum-burst state
+- toxicity score, derived from recent sweep-like flow versus displayed top-book liquidity
 - simulation timestamp
 - realized volatility and average spread summaries
 - a per-symbol `RegimeManager` exposing the current regime label and the three arrival intensities
@@ -180,6 +181,7 @@ Agents consume:
 - recent trades
 - current stats
 - their own live orders, position, and PnL
+- their live orders' FIFO queue position, quantity ahead, touch status, and estimated fill probability
 - an environment view that exposes allowed scenario state, including the current regime label, arrival intensities, and order-size dispersion
 
 Agents emit engine-agnostic intents:
@@ -193,6 +195,7 @@ Agents emit engine-agnostic intents:
 Behavior notes:
 
 - passive market makers are expected to keep the book two-sided even under inventory pressure
+- passive market makers quote multiple levels per side, reduce size with depth, and widen away from the touch as toxicity rises
 - aggressive momentum agents are capped so they stress liquidity without dominating price formation by themselves
 - mean-reversion agents and fair-value pullback act as stabilizers after overshoots
 
@@ -272,6 +275,8 @@ Internal DTOs:
 - `StatsEvent`
 - `PnLEvent`
 - `SimulationStateEvent`
+
+`SimulationStateEvent` also carries simulation microstructure state such as regime intensities and `toxicityScore`, so the dashboard and external clients can distinguish normal volatility from adverse-selection pressure.
 
 Every outbound event carries:
 
@@ -375,6 +380,7 @@ UI layout:
 Client behavior:
 
 - initial WebSocket snapshot seeds the store
+- incoming WebSocket frames are batched to animation frames before store application so high-rate streams do not force hundreds of React renders per second
 - subsequent deltas update only affected levels
 - sequence gaps trigger resync logic instead of blindly applying out-of-order frames
 - `execution` envelopes are accepted as sequencing events without changing book state

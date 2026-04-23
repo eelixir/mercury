@@ -37,6 +37,16 @@ namespace Mercury {
             }
         }
 
+        struct DesiredQuote {
+            Side side = Side::Buy;
+            int64_t price = 0;
+            uint64_t quantity = 0;
+        };
+
+        double clamp01(double value) {
+            return std::max(0.0, std::min(1.0, value));
+        }
+
         const SimulatedOrderInfo* findOrderBySide(const std::vector<SimulatedOrderInfo>& orders, Side side) {
             for (const auto& order : orders) {
                 if (order.side == side) {
@@ -86,6 +96,97 @@ namespace Mercury {
             return (bidQty - askQty) / totalQty;
         }
 
+        bool isMomentumClient(uint64_t clientId) {
+            const auto localId = clientId % 10000;
+            return localId >= 2000 && localId < 3000;
+        }
+
+        double estimateFillProbability(const SimulatedOrderInfo& order,
+                                       const L2Snapshot& snapshot,
+                                       double imbalance,
+                                       double toxicity) {
+            const double queueFactor = 1.0 / (1.0 + static_cast<double>(order.ordersAhead));
+            const double depthFactor = order.quantityAhead == 0
+                ? 1.0
+                : 1.0 / (1.0 + static_cast<double>(order.quantityAhead) /
+                                  static_cast<double>(std::max<uint64_t>(1, order.quantity)));
+            const double sideBias = order.side == Side::Buy ? imbalance : -imbalance;
+            double touchBoost = 0.0;
+            if ((order.side == Side::Buy && snapshot.bestBid == order.price) ||
+                (order.side == Side::Sell && snapshot.bestAsk == order.price)) {
+                touchBoost = 0.12;
+            }
+
+            return clamp01(0.08 + queueFactor * 0.48 + depthFactor * 0.20 +
+                           sideBias * 0.12 + touchBoost - toxicity * 0.15);
+        }
+
+        std::vector<const SimulatedOrderInfo*> collectOrdersBySide(const std::vector<SimulatedOrderInfo>& orders, Side side) {
+            std::vector<const SimulatedOrderInfo*> filtered;
+            filtered.reserve(orders.size());
+
+            for (const auto& order : orders) {
+                if (order.side == side) {
+                    filtered.push_back(&order);
+                }
+            }
+
+            std::sort(filtered.begin(), filtered.end(), [side](const SimulatedOrderInfo* left, const SimulatedOrderInfo* right) {
+                if (left->price == right->price) {
+                    return left->queuePosition < right->queuePosition;
+                }
+                return side == Side::Buy ? left->price > right->price : left->price < right->price;
+            });
+
+            return filtered;
+        }
+
+        std::vector<OrderIntent> reconcileQuotes(const std::vector<const SimulatedOrderInfo*>& liveOrders,
+                                                 const std::vector<DesiredQuote>& desiredQuotes) {
+            std::vector<OrderIntent> intents;
+            const size_t shared = std::min(liveOrders.size(), desiredQuotes.size());
+
+            for (size_t i = 0; i < shared; ++i) {
+                const auto* live = liveOrders[i];
+                const auto& desired = desiredQuotes[i];
+                if (live->price != desired.price || live->quantity != desired.quantity) {
+                    intents.push_back(OrderIntent{
+                        OrderIntentKind::Modify,
+                        desired.side,
+                        0,
+                        0,
+                        TimeInForce::GTC,
+                        live->orderId,
+                        desired.price,
+                        desired.quantity
+                    });
+                }
+            }
+
+            for (size_t i = shared; i < liveOrders.size(); ++i) {
+                intents.push_back(OrderIntent{
+                    OrderIntentKind::Cancel,
+                    liveOrders[i]->side,
+                    0,
+                    0,
+                    TimeInForce::GTC,
+                    liveOrders[i]->orderId
+                });
+            }
+
+            for (size_t i = shared; i < desiredQuotes.size(); ++i) {
+                intents.push_back(OrderIntent{
+                    OrderIntentKind::PlaceLimit,
+                    desiredQuotes[i].side,
+                    desiredQuotes[i].price,
+                    desiredQuotes[i].quantity,
+                    TimeInForce::GTC
+                });
+            }
+
+            return intents;
+        }
+
         class PassiveMarketMakerAgent final : public SimulationAgent {
         public:
             explicit PassiveMarketMakerAgent(SimulationVolatilityPreset preset)
@@ -103,78 +204,112 @@ namespace Mercury {
             }
 
             std::vector<OrderIntent> onWake(const SimulationObservation& observation) override {
-                std::vector<OrderIntent> intents;
                 const auto fair = observation.environment.latentFairValue > 0
                     ? observation.environment.latentFairValue
                     : fallbackReferencePrice(observation);
                 if (fair <= 0) {
-                    return intents;
+                    return {};
                 }
 
                 const auto params = paramsForPreset(preset_);
                 const int64_t inventory = observation.ownPnL ? observation.ownPnL->netPosition : 0;
-                const int64_t toxicityAdjust = observation.environment.momentumBurst ? 2 : 0;
+                const double toxicity = clamp01(observation.environment.toxicityScore);
+                const int64_t toxicityAdjust = static_cast<int64_t>(std::llround(toxicity * 4.0)) +
+                                               (observation.environment.momentumBurst ? 1 : 0);
                 const int64_t inventoryAdjust = std::min<int64_t>(4, std::abs(inventory) / 40);
                 const int64_t spread = static_cast<int64_t>(params.marketMakerSpread) + toxicityAdjust + inventoryAdjust;
                 const int64_t skew = inventory / 50;
-                const int64_t bidPrice = std::max<int64_t>(1, fair - spread / 2 - skew);
-                const int64_t askPrice = std::max<int64_t>(bidPrice + 1, fair + spread / 2 - skew);
                 const uint64_t minQuoteQty = std::max<uint64_t>(10, params.marketMakerQuoteQty / 4);
+                const size_t quoteLevels = preset_ == SimulationVolatilityPreset::High
+                    ? 4
+                    : (preset_ == SimulationVolatilityPreset::Low ? 2 : 3);
+                const int64_t rawBid = std::max<int64_t>(1, fair - spread / 2 - skew);
+                const int64_t rawAsk = std::max<int64_t>(rawBid + 1, fair + spread / 2 - skew);
+                int64_t bestBidPrice = rawBid;
+                int64_t bestAskPrice = rawAsk;
+                const int64_t touchOffset = std::min<int64_t>(4, 1 + toxicityAdjust);
 
-                uint64_t bidQty = params.marketMakerQuoteQty;
-                uint64_t askQty = params.marketMakerQuoteQty;
+                if (observation.snapshot.bestBid.has_value()) {
+                    bestBidPrice = std::max(bestBidPrice, *observation.snapshot.bestBid - touchOffset);
+                }
+                if (observation.snapshot.bestAsk.has_value()) {
+                    bestAskPrice = std::min(bestAskPrice, *observation.snapshot.bestAsk + touchOffset);
+                }
+                if (bestAskPrice <= bestBidPrice) {
+                    bestAskPrice = bestBidPrice + 1;
+                }
+
+                double bidInventoryScale = 1.0;
+                double askInventoryScale = 1.0;
                 if (inventory > 0) {
-                    bidQty = inventory > 120 ? minQuoteQty : std::max<uint64_t>(minQuoteQty, bidQty / 2);
-                    askQty = static_cast<uint64_t>(askQty * 1.25);
+                    bidInventoryScale = inventory > 120 ? 0.35 : 0.65;
+                    askInventoryScale = 1.20;
                 } else if (inventory < 0) {
-                    askQty = -inventory > 120 ? minQuoteQty : std::max<uint64_t>(minQuoteQty, askQty / 2);
-                    bidQty = static_cast<uint64_t>(bidQty * 1.25);
+                    askInventoryScale = -inventory > 120 ? 0.35 : 0.65;
+                    bidInventoryScale = 1.20;
                 }
 
-                if (observation.snapshot.bids.empty()) {
-                    bidQty = std::max<uint64_t>(bidQty, minQuoteQty);
-                }
-                if (observation.snapshot.asks.empty()) {
-                    askQty = std::max<uint64_t>(askQty, minQuoteQty);
+                std::vector<DesiredQuote> desiredBids;
+                std::vector<DesiredQuote> desiredAsks;
+                desiredBids.reserve(quoteLevels);
+                desiredAsks.reserve(quoteLevels);
+
+                for (size_t level = 0; level < quoteLevels; ++level) {
+                    const uint64_t levelBaseQty = std::max<uint64_t>(
+                        minQuoteQty,
+                        params.marketMakerQuoteQty / static_cast<uint64_t>(level + 1));
+                    const uint64_t bidQty = std::max<uint64_t>(
+                        minQuoteQty,
+                        static_cast<uint64_t>(std::llround(static_cast<double>(levelBaseQty) * bidInventoryScale)));
+                    const uint64_t askQty = std::max<uint64_t>(
+                        minQuoteQty,
+                        static_cast<uint64_t>(std::llround(static_cast<double>(levelBaseQty) * askInventoryScale)));
+
+                    desiredBids.push_back(DesiredQuote{
+                        Side::Buy,
+                        std::max<int64_t>(1, bestBidPrice - static_cast<int64_t>(level)),
+                        bidQty
+                    });
+                    desiredAsks.push_back(DesiredQuote{
+                        Side::Sell,
+                        std::max<int64_t>(bestBidPrice + 1, bestAskPrice + static_cast<int64_t>(level)),
+                        askQty
+                    });
                 }
 
-                const auto* liveBid = findOrderBySide(observation.liveOrders, Side::Buy);
-                const auto* liveAsk = findOrderBySide(observation.liveOrders, Side::Sell);
+                auto bidOrders = collectOrdersBySide(observation.liveOrders, Side::Buy);
+                auto askOrders = collectOrdersBySide(observation.liveOrders, Side::Sell);
 
-                if (bidQty == 0 && liveBid) {
-                    intents.push_back(OrderIntent{OrderIntentKind::Cancel, Side::Buy, 0, 0, TimeInForce::GTC, liveBid->orderId});
-                } else if (bidQty > 0) {
-                    if (liveBid) {
-                        if (std::abs(liveBid->price - bidPrice) >= 1 || liveBid->quantity != bidQty) {
-                            intents.push_back(OrderIntent{
-                                OrderIntentKind::Modify, Side::Buy, 0, 0, TimeInForce::GTC,
-                                liveBid->orderId, bidPrice, bidQty
-                            });
-                        }
-                    } else {
-                        intents.push_back(OrderIntent{
-                            OrderIntentKind::PlaceLimit, Side::Buy, bidPrice, bidQty, TimeInForce::GTC
-                        });
+                if (!bidOrders.empty()) {
+                    const auto* topBid = bidOrders.front();
+                    if (topBid->atTouch &&
+                        topBid->fillProbability < 0.20 &&
+                        topBid->ordersAhead >= 2 &&
+                        observation.snapshot.bestAsk.has_value() &&
+                        desiredBids.front().price + 1 < *observation.snapshot.bestAsk &&
+                        toxicity < 0.75) {
+                        desiredBids.front().price = std::max<int64_t>(desiredBids.front().price, topBid->price + 1);
+                    }
+                }
+                if (!askOrders.empty()) {
+                    const auto* topAsk = askOrders.front();
+                    if (topAsk->atTouch &&
+                        topAsk->fillProbability < 0.20 &&
+                        topAsk->ordersAhead >= 2 &&
+                        observation.snapshot.bestBid.has_value() &&
+                        desiredAsks.front().price - 1 > *observation.snapshot.bestBid &&
+                        toxicity < 0.75) {
+                        desiredAsks.front().price = std::min<int64_t>(desiredAsks.front().price, topAsk->price - 1);
                     }
                 }
 
-                if (askQty == 0 && liveAsk) {
-                    intents.push_back(OrderIntent{OrderIntentKind::Cancel, Side::Sell, 0, 0, TimeInForce::GTC, liveAsk->orderId});
-                } else if (askQty > 0) {
-                    if (liveAsk) {
-                        if (std::abs(liveAsk->price - askPrice) >= 1 || liveAsk->quantity != askQty) {
-                            intents.push_back(OrderIntent{
-                                OrderIntentKind::Modify, Side::Sell, 0, 0, TimeInForce::GTC,
-                                liveAsk->orderId, askPrice, askQty
-                            });
-                        }
-                    } else {
-                        intents.push_back(OrderIntent{
-                            OrderIntentKind::PlaceLimit, Side::Sell, askPrice, askQty, TimeInForce::GTC
-                        });
-                    }
+                if (desiredAsks.front().price <= desiredBids.front().price) {
+                    desiredAsks.front().price = desiredBids.front().price + 1;
                 }
 
+                auto intents = reconcileQuotes(bidOrders, desiredBids);
+                auto askIntents = reconcileQuotes(askOrders, desiredAsks);
+                intents.insert(intents.end(), askIntents.begin(), askIntents.end());
                 return intents;
             }
 
@@ -711,6 +846,7 @@ namespace Mercury {
             if (envIt != envs_.end()) {
                 state.realizedVolatilityBps = envIt->second.realizedVolatilityBps;
                 state.averageSpread = envIt->second.averageSpread;
+                state.toxicityScore = envIt->second.toxicityScore;
                 const auto intensity = envIt->second.regime.intensity();
                 state.regime = marketRegimeToString(envIt->second.regime.regime());
                 state.limitLambda = intensity.limitLambda;
@@ -944,6 +1080,7 @@ namespace Mercury {
     SimulationObservation MarketRuntime::buildObservation(const std::string& symbol, uint64_t clientId) {
         SimulationObservation observation;
         observation.snapshot = engineService_->getSnapshot(symbol, 20);
+        std::vector<LiveOrderRecord> ownOrders;
 
         {
             std::lock_guard<std::mutex> lock(stateMutex_);
@@ -956,16 +1093,12 @@ namespace Mercury {
                 observation.ownPnL = pnlIt->second;
             }
 
-            for (const auto& [orderId, record] : env.liveOrdersById) {
+            for (const auto& entry : env.liveOrdersById) {
+                const auto& record = entry.second;
                 if (record.clientId != clientId) {
                     continue;
                 }
-                observation.liveOrders.push_back(SimulatedOrderInfo{
-                    orderId,
-                    record.side,
-                    record.price,
-                    record.quantity
-                });
+                ownOrders.push_back(record);
             }
 
             observation.environment.latentFairValue = env.latentFairValue;
@@ -973,11 +1106,45 @@ namespace Mercury {
             observation.environment.momentumDirection = env.momentumDirection;
             observation.environment.realizedVolatilityBps = env.realizedVolatilityBps;
             observation.environment.averageSpread = env.averageSpread;
+            observation.environment.toxicityScore = env.toxicityScore;
             observation.environment.volatilityPreset = simulationVolatilityToString(simulationConfig_.volatility);
             observation.environment.simulationTimestamp = simulationTimestampMs_;
             observation.environment.regime = env.regime.regime();
             observation.environment.intensity = env.regime.intensity();
             observation.environment.dispersion = env.regime.dispersion();
+        }
+
+        std::vector<uint64_t> orderIds;
+        orderIds.reserve(ownOrders.size());
+        for (const auto& record : ownOrders) {
+            orderIds.push_back(record.orderId);
+        }
+        const auto queuePositions = engineService_->getQueuePositions(symbol, orderIds);
+
+        const double imbalance = topLevelImbalance(observation);
+        for (const auto& record : ownOrders) {
+            SimulatedOrderInfo info;
+            info.orderId = record.orderId;
+            info.side = record.side;
+            info.price = record.price;
+            info.quantity = record.quantity;
+            info.atTouch =
+                (record.side == Side::Buy && observation.snapshot.bestBid == record.price) ||
+                (record.side == Side::Sell && observation.snapshot.bestAsk == record.price);
+
+            auto queueIt = queuePositions.find(record.orderId);
+            if (queueIt != queuePositions.end()) {
+                info.queuePosition = queueIt->second.queueIndex;
+                info.ordersAhead = queueIt->second.ordersAhead;
+                info.quantityAhead = queueIt->second.quantityAhead;
+            }
+
+            info.fillProbability = estimateFillProbability(
+                info,
+                observation.snapshot,
+                imbalance,
+                observation.environment.toxicityScore);
+            observation.liveOrders.push_back(info);
         }
 
         if (observation.stats.timestamp == 0) {
@@ -1116,6 +1283,45 @@ namespace Mercury {
             env.burstRemainingMs = params.burstDurationMs;
         }
 
+        uint64_t displayedDepth = 0;
+        const int64_t bestBid = env.lastStats.bestBid.value_or(std::max<int64_t>(1, env.latentFairValue - 1));
+        const int64_t bestAsk = env.lastStats.bestAsk.value_or(env.latentFairValue + 1);
+        for (const auto& entry : env.liveOrdersById) {
+            const auto& record = entry.second;
+            if (record.side == Side::Buy && record.price >= bestBid - 2) {
+                displayedDepth += record.quantity;
+            } else if (record.side == Side::Sell && record.price <= bestAsk + 2) {
+                displayedDepth += record.quantity;
+            }
+        }
+
+        uint64_t toxicFlow = 0;
+        size_t inspectedTrades = 0;
+        for (const auto& trade : env.recentTrades) {
+            if (inspectedTrades++ >= 16) {
+                break;
+            }
+
+            const bool momentumInvolved = isMomentumClient(trade.buyClientId) || isMomentumClient(trade.sellClientId);
+            const bool sweepSized =
+                displayedDepth > 0 &&
+                trade.quantity >= std::max<uint64_t>(8, displayedDepth / 8);
+            toxicFlow += momentumInvolved || sweepSized
+                ? trade.quantity
+                : std::max<uint64_t>(1, trade.quantity / 4);
+        }
+
+        double rawToxicity = displayedDepth > 0
+            ? static_cast<double>(toxicFlow) / static_cast<double>(displayedDepth)
+            : 0.0;
+        if (env.momentumBurst) {
+            rawToxicity += 0.25;
+        }
+        if (env.regime.regime() == MarketRegime::Stressed) {
+            rawToxicity += 0.10;
+        }
+        env.toxicityScore = clamp01(env.toxicityScore * 0.82 + clamp01(rawToxicity) * 0.18);
+
         env.regime.observe(env.realizedVolatilityBps,
                            env.momentumBurst,
                            env.averageSpread,
@@ -1188,6 +1394,7 @@ namespace Mercury {
             event.noiseTraderCount = simulationConfig_.noiseTraderCount;
             event.realizedVolatilityBps = env.realizedVolatilityBps;
             event.averageSpread = env.averageSpread;
+            event.toxicityScore = env.toxicityScore;
             const auto intensity = env.regime.intensity();
             event.regime = marketRegimeToString(env.regime.regime());
             event.limitLambda = intensity.limitLambda;

@@ -197,7 +197,8 @@ namespace Mercury {
                     {"momentumCount", state.momentumCount},
                     {"meanReversionCount", state.meanReversionCount},
                     {"realizedVolatilityBps", state.realizedVolatilityBps},
-                    {"averageSpread", state.averageSpread}
+                    {"averageSpread", state.averageSpread},
+                    {"toxicityScore", state.toxicityScore}
                 }}
             };
         }
@@ -217,6 +218,7 @@ namespace Mercury {
                 {"noiseTraderCount", state.noiseTraderCount},
                 {"realizedVolatilityBps", state.realizedVolatilityBps},
                 {"averageSpread", state.averageSpread},
+                {"toxicityScore", state.toxicityScore},
                 {"regime", state.regime},
                 {"limitLambda", state.limitLambda},
                 {"cancelLambda", state.cancelLambda},

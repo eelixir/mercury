@@ -77,6 +77,7 @@ namespace Mercury {
                 event.noiseTraderCount = state.noiseTraderCount;
                 event.realizedVolatilityBps = state.realizedVolatilityBps; // primary symbol stats for initial connect
                 event.averageSpread = state.averageSpread;
+                event.toxicityScore = state.toxicityScore;
                 event.regime = state.regime;
                 event.limitLambda = state.limitLambda;
                 event.cancelLambda = state.cancelLambda;

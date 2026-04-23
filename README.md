@@ -23,6 +23,7 @@ Mercury is a low-latency trading engine implementing a full limit order book wit
 - **P&L Tracking:** Realized and unrealized P&L with FIFO cost basis
 - **Unified Market Runtime:** One runtime for manual orders, replay, built-in agents, and headless simulation
 - **Built-In Agents:** Passive market maker, aggressive momentum trader, mean-reversion bot, Poisson-flow noise trader
+- **Advanced Microstructure:** Queue-position-aware agents, deeper multi-level market-maker quoting, and toxicity-driven spread widening
 - **Regime Manager:** Auto-detected `calm`/`normal`/`stressed` regimes with explicit Poisson λ controls for limit, cancel, and marketable arrival rates, plus Pareto order-size dispersion for whale-vs-retail flow
 - **Live Server:** HTTP order entry + dual WebSocket market data (JSON and binary)
 - **React Dashboard:** Real-time ladder, trade tape, mid-price chart, order entry, P&L, simulation controls, system health
@@ -260,6 +261,7 @@ Force a specific market regime (`calm`, `normal`, or `stressed`):
 - simulation timestamp
 - market-maker, momentum, mean-reversion, and noise-trader agent counts
 - realized volatility and average spread summaries
+- toxicity score, measuring recent sweep-like flow versus displayed top-book liquidity
 - current market regime (`calm`, `normal`, `stressed`) and the active Poisson arrival intensities (`limitLambda`, `cancelLambda`, `marketableLambda`), all expressed as expected events per millisecond
 
 ### Binary Protocol

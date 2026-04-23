@@ -60,6 +60,8 @@ Do not assume an older README claim still matches the build. Verify it in code.
 - The system supports multiple symbols via an EngineService registry. The core `Order` and `OrderBook` remain single-instrument primitives. Do not push symbol into core order types unless explicitly required.
 - Preserve the current order-book storage split unless the task explicitly justifies changing it: `absl::btree_map` price ladders, Abseil-backed `HashMap` lookups, and intrusive FIFO queues within each level.
 - Volatility presets should change participation, spread, and short-term noise without causing runaway price drift over a few seconds.
+- Queue-position-aware agents must source queue index and quantity-ahead from the actual intrusive FIFO `PriceLevel`, not from copied L2 aggregates.
+- Toxicity/adverse-selection metrics should widen spreads and change participation pressure without becoming an unbounded trend generator.
 
 ## Working Rules For Agents
 

@@ -78,6 +78,7 @@ export interface SimulationStatePayload {
   meanReversionCount: number
   realizedVolatilityBps: number
   averageSpread: number
+  toxicityScore: number
 }
 
 export interface ExecutionPayload {

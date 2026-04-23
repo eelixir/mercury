@@ -65,6 +65,27 @@ TEST(OrderBookTest, AddMultipleBuyOrdersSamePrice) {
     EXPECT_EQ(book.getBestBid(), 100);
 }
 
+TEST(OrderBookTest, QueuePositionTracksIntrusiveFifoOrder) {
+    OrderBook book;
+    book.addOrder(createOrder(1, Side::Buy, 100, 50));
+    book.addOrder(createOrder(2, Side::Buy, 100, 30));
+    book.addOrder(createOrder(3, Side::Buy, 100, 20));
+
+    auto second = book.getQueuePosition(2);
+    ASSERT_TRUE(second.has_value());
+    EXPECT_EQ(second->queueIndex, 1u);
+    EXPECT_EQ(second->ordersAhead, 1u);
+    EXPECT_EQ(second->quantityAhead, 50u);
+    EXPECT_EQ(second->levelOrderCount, 3u);
+    EXPECT_EQ(second->levelQuantity, 100u);
+
+    book.removeOrder(1);
+    auto shifted = book.getQueuePosition(2);
+    ASSERT_TRUE(shifted.has_value());
+    EXPECT_EQ(shifted->queueIndex, 0u);
+    EXPECT_EQ(shifted->quantityAhead, 0u);
+}
+
 TEST(OrderBookTest, AddMultipleSellOrdersDifferentPrices) {
     OrderBook book;
     book.addOrder(createOrder(1, Side::Sell, 110, 50));

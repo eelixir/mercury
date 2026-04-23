@@ -1,4 +1,4 @@
-import { useDeferredValue, useMemo } from 'react'
+import { useMemo } from 'react'
 import { formatPrice } from '../lib/format'
 import { useActiveBucket } from '../store/market-data-store'
 import { Card, CardBody, CardHeader } from './ui/card'
@@ -55,8 +55,8 @@ function Header() {
 
 export function OrderBookLadder() {
   const bucket = useActiveBucket()
-  const asks = useDeferredValue(bucket.asks)
-  const bids = useDeferredValue(bucket.bids)
+  const asks = bucket.asks
+  const bids = bucket.bids
   const stats = bucket.stats
 
   const maxQuantity = useMemo(() => {
@@ -68,18 +68,19 @@ export function OrderBookLadder() {
 
   const askRows = useMemo(() => {
     const reversed = asks.slice().reverse()
-    let running = 0
-    const totals = asks.map((lvl) => (running += lvl.quantity))
-    const cumMap = new Map(asks.map((lvl, i) => [lvl.price, totals[i]]))
+    const totals = asks.reduce<Array<readonly [number, number]>>((acc, lvl) => {
+      const previous = acc.length > 0 ? acc[acc.length - 1][1] : 0
+      return [...acc, [lvl.price, previous + lvl.quantity] as const]
+    }, [])
+    const cumMap = new Map(totals)
     return reversed.map((lvl) => ({ ...lvl, cumulative: cumMap.get(lvl.price) ?? lvl.quantity }))
   }, [asks])
 
   const bidRows = useMemo(() => {
-    let running = 0
-    return bids.map((lvl) => {
-      running += lvl.quantity
-      return { ...lvl, cumulative: running }
-    })
+    return bids.reduce<Array<(typeof bids)[number] & { cumulative: number }>>((acc, lvl) => {
+      const previous = acc.length > 0 ? acc[acc.length - 1].cumulative : 0
+      return [...acc, { ...lvl, cumulative: previous + lvl.quantity }]
+    }, [])
   }, [bids])
 
   const mid = stats?.midPrice ?? null

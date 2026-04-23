@@ -131,6 +131,7 @@ namespace Mercury {
         size_t noiseTraderCount = 0;
         double realizedVolatilityBps = 0.0;
         double averageSpread = 0.0;
+        double toxicityScore = 0.0;
         std::string regime;
         double limitLambda = 0.0;
         double cancelLambda = 0.0;

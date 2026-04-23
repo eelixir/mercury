@@ -83,6 +83,133 @@ describe('market data store', () => {
     expect(needsResync).toBe(true)
   })
 
+  it('does not treat other symbols global sequence numbers as active-symbol gaps', () => {
+    const store = useMarketDataStore.getState()
+
+    store.applyEnvelope({
+      type: 'snapshot',
+      sequence: 10,
+      symbol: 'SIM',
+      payload: {
+        depth: 20,
+        bids: [{ side: 'buy', price: 100, quantity: 5, orderCount: 1 }],
+        asks: [{ side: 'sell', price: 101, quantity: 7, orderCount: 1 }],
+        bestBid: 100,
+        bestAsk: 101,
+        spread: 1,
+        midPrice: 100,
+        timestamp: 10,
+      },
+    })
+
+    store.applyEnvelope({
+      type: 'snapshot',
+      sequence: 10,
+      symbol: 'AAPL',
+      payload: {
+        depth: 20,
+        bids: [{ side: 'buy', price: 200, quantity: 3, orderCount: 1 }],
+        asks: [{ side: 'sell', price: 201, quantity: 4, orderCount: 1 }],
+        bestBid: 200,
+        bestAsk: 201,
+        spread: 1,
+        midPrice: 200,
+        timestamp: 10,
+      },
+    })
+
+    const aaplNeedsResync = store.applyEnvelope({
+      type: 'book_delta',
+      sequence: 11,
+      symbol: 'AAPL',
+      payload: {
+        side: 'buy',
+        price: 200,
+        quantity: 8,
+        orderCount: 2,
+        action: 'upsert',
+        timestamp: 11,
+      },
+    })
+
+    const simNeedsResync = store.applyEnvelope({
+      type: 'trade',
+      sequence: 12,
+      symbol: 'SIM',
+      payload: {
+        tradeId: 1,
+        price: 101,
+        quantity: 2,
+        buyOrderId: 10,
+        sellOrderId: 11,
+        buyClientId: 1,
+        sellClientId: 2,
+        timestamp: 12,
+      },
+    })
+
+    const snapshot = useMarketDataStore.getState()
+    expect(aaplNeedsResync).toBe(false)
+    expect(simNeedsResync).toBe(false)
+    expect(snapshot.bySymbol['SIM'].trades).toHaveLength(1)
+    expect(snapshot.bySymbol['AAPL'].bids[0].quantity).toBe(8)
+  })
+
+  it('applies a symbol frame that is older than the global snapshot but newer than that symbol snapshot', () => {
+    const store = useMarketDataStore.getState()
+
+    store.applyEnvelope({
+      type: 'snapshot',
+      sequence: 10,
+      symbol: 'SIM',
+      payload: {
+        depth: 20,
+        bids: [{ side: 'buy', price: 100, quantity: 5, orderCount: 1 }],
+        asks: [{ side: 'sell', price: 101, quantity: 7, orderCount: 1 }],
+        bestBid: 100,
+        bestAsk: 101,
+        spread: 1,
+        midPrice: 100,
+        timestamp: 10,
+      },
+    })
+
+    store.applyEnvelope({
+      type: 'snapshot',
+      sequence: 20,
+      symbol: 'AAPL',
+      payload: {
+        depth: 20,
+        bids: [{ side: 'buy', price: 200, quantity: 3, orderCount: 1 }],
+        asks: [{ side: 'sell', price: 201, quantity: 4, orderCount: 1 }],
+        bestBid: 200,
+        bestAsk: 201,
+        spread: 1,
+        midPrice: 200,
+        timestamp: 20,
+      },
+    })
+
+    const needsResync = store.applyEnvelope({
+      type: 'book_delta',
+      sequence: 15,
+      symbol: 'SIM',
+      payload: {
+        side: 'buy',
+        price: 100,
+        quantity: 9,
+        orderCount: 2,
+        action: 'upsert',
+        timestamp: 15,
+      },
+    })
+
+    const snapshot = useMarketDataStore.getState()
+    expect(needsResync).toBe(false)
+    expect(snapshot.bySymbol['SIM'].bids[0].quantity).toBe(9)
+    expect(snapshot.streamSequence).toBe(20)
+  })
+
   it('applies simulation state without forcing resync', () => {
     const needsResync = useMarketDataStore.getState().applyEnvelope({
       type: 'sim_state',
@@ -101,6 +228,7 @@ describe('market data store', () => {
         meanReversionCount: 1,
         realizedVolatilityBps: 42.5,
         averageSpread: 5.5,
+        toxicityScore: 0.35,
       },
     })
 

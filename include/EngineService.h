@@ -55,6 +55,9 @@ namespace Mercury {
         ExecutionResult submitOrder(const std::string& symbol, Order order);
         ExecutionResult submitOrder(const std::string& symbol, Order order, uint64_t entryTimestampNs);
         L2Snapshot getSnapshot(const std::string& symbol, size_t depth = 20);
+        std::optional<OrderBook::QueuePositionInfo> getQueuePosition(const std::string& symbol, uint64_t orderId);
+        std::unordered_map<uint64_t, OrderBook::QueuePositionInfo> getQueuePositions(const std::string& symbol,
+                                                                                     const std::vector<uint64_t>& orderIds);
         EngineState getState();
 
         bool startReplay(const std::string& inputFile, double speed = 1.0,

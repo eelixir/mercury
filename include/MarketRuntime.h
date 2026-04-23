@@ -75,6 +75,7 @@ namespace Mercury {
         int momentumDirection = 0;
         double realizedVolatilityBps = 0.0;
         double averageSpread = 0.0;
+        double toxicityScore = 0.0;
         std::string volatilityPreset;
         uint64_t simulationTimestamp = 0;
         MarketRegime regime = MarketRegime::Normal;
@@ -87,6 +88,11 @@ namespace Mercury {
         Side side = Side::Buy;
         int64_t price = 0;
         uint64_t quantity = 0;
+        size_t queuePosition = 0;
+        size_t ordersAhead = 0;
+        uint64_t quantityAhead = 0;
+        double fillProbability = 0.0;
+        bool atTouch = false;
     };
 
     struct SimulationObservation {
@@ -160,6 +166,7 @@ namespace Mercury {
         size_t noiseTraderCount = 0;
         double realizedVolatilityBps = 0.0;
         double averageSpread = 0.0;
+        double toxicityScore = 0.0;
         std::string regime = "normal";
         double limitLambda = 0.0;
         double cancelLambda = 0.0;
@@ -257,6 +264,7 @@ namespace Mercury {
             uint64_t burstRemainingMs = 0;
             double averageSpread = 0.0;
             double realizedVolatilityBps = 0.0;
+            double toxicityScore = 0.0;
             std::vector<int64_t> midHistory;
             StatsEvent lastStats;
             std::vector<TradeEvent> recentTrades;

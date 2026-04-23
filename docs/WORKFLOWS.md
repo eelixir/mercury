@@ -63,6 +63,8 @@ Required checks:
 - simulation controls and runtime-state reporting stay aligned with backend behavior
 - frontend store still understands the emitted envelope shape
 - telemetry fields (`engineLatencyNs`, `messagesPerSecond`) are populated correctly
+- queue-position fields stay sourced from the actual intrusive FIFO `PriceLevel` order, not from copied snapshots
+- toxicity changes spread behavior without creating runaway price drift
 - both JSON (`/ws/market`) and binary (`/ws/market/bin`) paths publish consistently
 - volatility preset changes still produce believable market behavior rather than runaway multi-second price drift
 
