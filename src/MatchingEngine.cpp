@@ -103,9 +103,17 @@ namespace Mercury {
 
         // If order still has remaining quantity, add to book (GTC behavior)
         if (order.quantity > 0) {
-            orderBook_.addOrder(order);
+            if (!orderBook_.addOrder(order)) {
+                // Pool exhausted or internal failure - remainder cannot rest.
+                // Preserve any fills we already produced but mark the rest
+                // as rejected so the caller sees an accurate picture.
+                result.status = ExecutionStatus::Rejected;
+                result.rejectReason = RejectReason::InternalError;
+                result.message = "Failed to rest order in book (pool exhausted)";
+                return result;
+            }
             notifyBookMutation(order.side, order.price, BookDeltaAction::Upsert);
-            
+
             if (result.hasFills()) {
                 result.status = ExecutionStatus::PartialFill;
                 result.message = "Partially filled, remainder resting in book";
@@ -292,7 +300,15 @@ namespace Mercury {
             }
         } else {
             // Just add to book
-            orderBook_.addOrder(modifiedOrder);
+            if (!orderBook_.addOrder(modifiedOrder)) {
+                // Original was already removed above; we cannot re-rest it.
+                // Report as a rejected modify so the client sees the loss.
+                result.status = ExecutionStatus::Rejected;
+                result.rejectReason = RejectReason::InternalError;
+                result.remainingQuantity = modifiedOrder.quantity;
+                result.message = "Modify failed: could not re-rest order (pool exhausted)";
+                return result;
+            }
             notifyBookMutation(modifiedOrder.side, modifiedOrder.price, BookDeltaAction::Upsert);
             result.status = ExecutionStatus::Modified;
             result.remainingQuantity = modifiedOrder.quantity;
@@ -371,9 +387,17 @@ namespace Mercury {
             return 0;
         }
 
-        // Collect order IDs to process (we can't modify list while iterating)
-        // Using a small vector to avoid allocations for typical cases
-        std::vector<OrderNode*> ordersToProcess;
+        // Snapshot identifiers of candidate resting orders up front. We capture
+        // {id, clientId} rather than raw OrderNode* because notifyTrade() below
+        // invokes external callbacks that may re-enter the engine (cancel/
+        // modify/submit) and release nodes back to the object pool. Re-looking
+        // up by id on every iteration guarantees we never dereference freed
+        // memory.
+        struct Candidate {
+            uint64_t id;
+            uint64_t clientId;
+        };
+        std::vector<Candidate> ordersToProcess;
         ordersToProcess.reserve(std::min(level->size(), size_t(32)));
 
         {
@@ -386,21 +410,30 @@ namespace Mercury {
                     continue;
                 }
 
-                ordersToProcess.push_back(&restingNode);
+                ordersToProcess.push_back({restingNode.id, restingNode.clientId});
             }
         }
 
-        // Now process the collected orders
-        for (OrderNode* restingOrder : ordersToProcess) {
+        // Now process the collected orders. Re-resolve by id each iteration so
+        // nodes released by a callback earlier in the loop cannot be touched.
+        for (const Candidate& candidate : ordersToProcess) {
             if (order.quantity == 0) break;
-            if (!restingOrder || restingOrder->id == 0 || restingOrder->quantity == 0) {
+            if (candidate.id == 0) continue;
+
+            OrderNode* restingOrder = orderBook_.getOrderNode(candidate.id);
+            if (!restingOrder || restingOrder->quantity == 0) {
+                // Order was cancelled/consumed by a re-entrant callback from a
+                // previous fill in this loop - skip safely.
                 continue;
             }
 
             // Calculate fill quantity (with overflow protection)
             const uint64_t restingQuantity = restingOrder->quantity;
             const uint64_t fillQty = std::min(order.quantity, restingQuantity);
-            
+            // Cache side up front: notifyTrade() below may trigger a re-entrant
+            // cancel that releases this node before we read it again.
+            const Side restingSide = restingOrder->side;
+
             // Edge case: zero fill (shouldn't happen)
             if (fillQty == 0) continue;
 
@@ -416,13 +449,13 @@ namespace Mercury {
 
                 if (order.side == Side::Buy) {
                     trade.buyOrderId = order.id;
-                    trade.sellOrderId = restingOrder->id;
+                    trade.sellOrderId = candidate.id;
                     trade.buyClientId = order.clientId;
-                    trade.sellClientId = restingOrder->clientId;
+                    trade.sellClientId = candidate.clientId;
                 } else {
-                    trade.buyOrderId = restingOrder->id;
+                    trade.buyOrderId = candidate.id;
                     trade.sellOrderId = order.id;
-                    trade.buyClientId = restingOrder->clientId;
+                    trade.buyClientId = candidate.clientId;
                     trade.sellClientId = order.clientId;
                 }
 
@@ -440,16 +473,22 @@ namespace Mercury {
             order.quantity -= fillQty;
             totalFilled += fillQty;
 
-            // Update or remove the resting order
+            // Update or remove the resting order. Re-resolve by id in case a
+            // notifyTrade callback above cancelled this order (which would
+            // release `restingOrder` back to the pool).
+            OrderNode* liveNode = orderBook_.getOrderNode(candidate.id);
+            if (!liveNode) {
+                // Callback already removed it - nothing for us to do.
+                continue;
+            }
             if (fillQty == restingQuantity) {
                 // Fully filled - remove from book
-                const Side restingSide = restingOrder->side;
-                orderBook_.removeOrder(restingOrder);
+                orderBook_.removeOrder(liveNode);
                 notifyBookMutation(restingSide, priceLevel, BookDeltaAction::Remove);
             } else {
                 // Partially filled - update quantity
-                orderBook_.updateOrderQuantity(restingOrder, restingQuantity - fillQty);
-                notifyBookMutation(restingOrder->side, priceLevel, BookDeltaAction::Upsert);
+                orderBook_.updateOrderQuantity(liveNode, restingQuantity - fillQty);
+                notifyBookMutation(restingSide, priceLevel, BookDeltaAction::Upsert);
             }
         }
 

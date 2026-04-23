@@ -74,7 +74,27 @@ namespace Mercury {
          */
         ExecutionResult modifyOrder(uint64_t orderId, int64_t newPrice, uint64_t newQuantity);
 
-        // Register callbacks for trade notifications
+        // Register callbacks for trade notifications.
+        //
+        // CALLBACK CONTRACT (important):
+        //   Callbacks are invoked synchronously from within MatchingEngine's
+        //   order-processing methods. When a callback fires the engine is in
+        //   the middle of iterating the book and a specific order's lifecycle.
+        //
+        //   Callbacks MUST NOT:
+        //     - Re-enter the MatchingEngine (submitOrder / cancel / modify)
+        //     - Mutate the OrderBook directly
+        //     - Retain raw OrderNode pointers past the callback return
+        //
+        //   Callbacks MAY:
+        //     - Read immutable fields of the supplied Trade / ExecutionResult
+        //       / BookMutation value objects
+        //     - Enqueue work for later dispatch (e.g. push onto a ring buffer
+        //       for another thread, or onto the engine's invoke() queue for
+        //       re-entrant operations)
+        //
+        //   Listeners that need to trigger follow-on orders should defer the
+        //   call until the current submitOrder/cancel/modify returns.
         void setTradeCallback(TradeCallback callback) { tradeCallback_ = std::move(callback); }
         void setExecutionCallback(ExecutionCallback callback) { executionCallback_ = std::move(callback); }
         void setBookMutationCallback(BookMutationCallback callback) { bookMutationCallback_ = std::move(callback); }

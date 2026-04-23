@@ -117,11 +117,21 @@ namespace Mercury {
         }
 
         /**
-         * Update the quantity of an order at this level
-         * @param node Order to update
+         * Update the quantity of an order at this level.
+         *
+         * If @p newQuantity is zero the order is unlinked from the level
+         * (callers must still recycle the node via the owning OrderBook).
+         * This guards against a footgun where passing 0 would otherwise leave
+         * a zero-quantity node in the FIFO queue, confusing match iteration.
+         *
+         * @param node Order to update (must be linked in this level)
          * @param newQuantity New quantity value
          */
         void updateOrderQuantity(OrderNode* node, uint64_t newQuantity) {
+            if (newQuantity == 0) {
+                removeOrder(node);
+                return;
+            }
             if (node->quantity <= totalQuantity) {
                 totalQuantity -= node->quantity;
             }

@@ -6,6 +6,25 @@
 
 namespace Mercury {
 
+    namespace {
+        // Weighted average of two (price, quantity) legs using double precision
+        // as an intermediate. double carries 53 bits of mantissa which is
+        // enough for price*position products well beyond any realistic
+        // trading scenario, and avoids the int64 overflow that a naive
+        // (oldAvg * oldQty + newPrice * newQty) / total_qty expression
+        // would suffer when both factors grow large.
+        inline int64_t weightedAveragePrice(int64_t oldAvg, int64_t oldQty,
+                                            int64_t newPrice, int64_t newQty) {
+            const int64_t totalQty = oldQty + newQty;
+            if (totalQty <= 0) {
+                return 0;
+            }
+            const double sum = static_cast<double>(oldAvg) * static_cast<double>(oldQty)
+                             + static_cast<double>(newPrice) * static_cast<double>(newQty);
+            return static_cast<int64_t>(sum / static_cast<double>(totalQty));
+        }
+    }
+
     // ==================== RiskManager ====================
 
     RiskManager::RiskManager() : defaultLimits_() {
@@ -284,19 +303,23 @@ namespace Mercury {
                 int64_t pnl = (buyerPos.avgSellPrice - trade.price) * closeQty;
                 buyerPos.realizedPnL += pnl;
                 buyerPos.shortPosition = 0;
+                const int64_t priorLongQty = buyerPos.longPosition;
                 buyerPos.longPosition += newLongQty;
-                // Update average buy price
+                // Update average buy price (overflow-safe weighted mean).
                 if (buyerPos.longPosition > 0) {
-                    buyerPos.avgBuyPrice = ((buyerPos.avgBuyPrice * (buyerPos.longPosition - newLongQty)) + 
-                                            (trade.price * newLongQty)) / buyerPos.longPosition;
+                    buyerPos.avgBuyPrice = weightedAveragePrice(
+                        buyerPos.avgBuyPrice, priorLongQty,
+                        trade.price, newLongQty);
                 }
             } else {
-                // Adding to long position
-                int64_t oldLongValue = buyerPos.avgBuyPrice * buyerPos.longPosition;
-                int64_t newValue = trade.price * static_cast<int64_t>(trade.quantity);
-                buyerPos.longPosition += static_cast<int64_t>(trade.quantity);
+                // Adding to long position (overflow-safe weighted mean).
+                const int64_t priorLongQty = buyerPos.longPosition;
+                const int64_t addQty = static_cast<int64_t>(trade.quantity);
+                buyerPos.longPosition += addQty;
                 if (buyerPos.longPosition > 0) {
-                    buyerPos.avgBuyPrice = (oldLongValue + newValue) / buyerPos.longPosition;
+                    buyerPos.avgBuyPrice = weightedAveragePrice(
+                        buyerPos.avgBuyPrice, priorLongQty,
+                        trade.price, addQty);
                 }
             }
         }
@@ -318,19 +341,23 @@ namespace Mercury {
                 int64_t pnl = (trade.price - sellerPos.avgBuyPrice) * closeQty;
                 sellerPos.realizedPnL += pnl;
                 sellerPos.longPosition = 0;
+                const int64_t priorShortQty = sellerPos.shortPosition;
                 sellerPos.shortPosition += newShortQty;
-                // Update average sell price
+                // Update average sell price (overflow-safe weighted mean).
                 if (sellerPos.shortPosition > 0) {
-                    sellerPos.avgSellPrice = ((sellerPos.avgSellPrice * (sellerPos.shortPosition - newShortQty)) + 
-                                               (trade.price * newShortQty)) / sellerPos.shortPosition;
+                    sellerPos.avgSellPrice = weightedAveragePrice(
+                        sellerPos.avgSellPrice, priorShortQty,
+                        trade.price, newShortQty);
                 }
             } else {
-                // Adding to short position
-                int64_t oldShortValue = sellerPos.avgSellPrice * sellerPos.shortPosition;
-                int64_t newValue = trade.price * static_cast<int64_t>(trade.quantity);
-                sellerPos.shortPosition += static_cast<int64_t>(trade.quantity);
+                // Adding to short position (overflow-safe weighted mean).
+                const int64_t priorShortQty = sellerPos.shortPosition;
+                const int64_t addQty = static_cast<int64_t>(trade.quantity);
+                sellerPos.shortPosition += addQty;
                 if (sellerPos.shortPosition > 0) {
-                    sellerPos.avgSellPrice = (oldShortValue + newValue) / sellerPos.shortPosition;
+                    sellerPos.avgSellPrice = weightedAveragePrice(
+                        sellerPos.avgSellPrice, priorShortQty,
+                        trade.price, addQty);
                 }
             }
         }
@@ -371,9 +398,10 @@ namespace Mercury {
         if (ptr != nullptr) {
             return *ptr;
         }
-        // Insert default position
-        clientPositions_.insert(clientId, ClientPosition());
-        return *clientPositions_.find(clientId);
+        // Insert default position and return a reference directly - avoids
+        // an extra hash lookup and, more importantly, the UB that would
+        // result if a later find() ever returned nullptr.
+        return clientPositions_[clientId];
     }
 
     void RiskManager::setClientLimits(uint64_t clientId, const RiskLimits& limits) {
