@@ -440,28 +440,18 @@ npm run test:run
 npm run build
 ```
 
-## Current V1 Boundaries
+## Future Updates
 
-These boundaries are intentional for the current market-making lab release. They keep Mercury focused on local, repeatable simulation rather than production brokerage infrastructure.
+Mercury's current release is focused on local, repeatable market-making simulation. Good next steps are:
 
-### In Scope
-
-- Localhost market lab for order-book, market-making, replay, and agent-behavior experiments
-- Single-book core engine with multi-symbol orchestration handled by the `EngineService` registry
-- Browser order entry over HTTP and read-only market data over WebSocket
-- JSON as the primary transport, with binary WebSocket frames for throughput-sensitive book/trade consumers
-- Instant headless backtests for fastest possible results and live server simulations that remain real-time by default
-- Local JSON/CSV artifacts for backtests, sweeps, agent attribution, queue analytics, and replay calibration
-- In-process C++ custom agents through the simulation runtime
-
-### Out Of Scope For V1
-
-- Broker connectivity, exchange connectivity, or production paper-trading account integration
-- Authentication, multi-user permissions, hosted deployment, or internet-facing operation
-- Durable database storage beyond local report artifacts
-- Serving the React frontend from the C++ process; the dashboard remains a separate Vite app
-- Python strategy loading or external strategy sandboxes
-- Full binary parity with every JSON market-data event; binary v1 focuses on book deltas and trades
+- [ ] Add optional broker or paper-trading adapters while keeping the simulator usable without external accounts.
+- [ ] Add authentication, multi-user permissions, and deployment hardening for non-localhost operation.
+- [ ] Add durable run storage so backtests, sweeps, calibration reports, and agent attribution can be queried across sessions.
+- [ ] Package the dashboard for production use, including an option to serve the built React app from the C++ server.
+- [ ] Add Python strategy loading or an external strategy sandbox with explicit safety and performance boundaries.
+- [ ] Extend the binary WebSocket protocol beyond book deltas and trades if low-latency consumers need full event parity.
+- [ ] Add richer scenario authoring tools for stress testing quote behavior, toxic flow, queue priority, and inventory limits.
+- [ ] Add deeper replay calibration reports that compare simulated fill quality, spread capture, and adverse selection against target datasets.
 
 ## License
 
