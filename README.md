@@ -31,7 +31,7 @@ The intended use case is experimentation: compare liquidity-provision settings, 
 - **Replay Calibration:** Replay CSV calibration reports comparing target order mix and quantity profile with observed simulated output
 - **Built-In Agents:** Passive market maker, aggressive momentum trader, mean-reversion bot, Poisson-flow noise trader
 - **Advanced Microstructure:** Queue-position-aware agents, deeper multi-level market-maker quoting, and toxicity-driven spread widening
-- **Regime Manager:** Auto-detected `calm`/`normal`/`stressed` regimes with explicit Poisson λ controls for limit, cancel, and marketable arrival rates, plus Pareto order-size dispersion for whale-vs-retail flow
+- **Regime Manager:** Auto-detected `calm`/`normal`/`stressed` regimes with explicit Poisson lambda controls for limit, cancel, and marketable arrival rates, plus Pareto order-size dispersion for whale-vs-retail flow
 - **Live Server:** HTTP order entry + dual WebSocket market data (JSON and binary)
 - **React Dashboard:** Real-time ladder, trade tape, mid-price chart, order entry, P&L, simulation controls, system health
 - **Latency Telemetry:** Nanosecond-precision tracking from gateway entry through engine to publication
@@ -42,37 +42,37 @@ The intended use case is experimentation: compare liquidity-provision settings, 
 ## Architecture
 
 ```text
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                            React Dashboard                                 │
-│  Order Entry │ PnL │ Sim Controls │ Ladder │ Tape │ Chart │ System Health │
-│                  Zustand Store ← WebSocket ← /ws/market                    │
-└─────────────────────────────────┬───────────────────────────────────────────┘
-                                  │ HTTP POST /api/orders
-┌─────────────────────────────────▼───────────────────────────────────────────┐
-│                           OrderEntryGateway                                │
-│            JSON parse → latency stamp → MarketRuntime::submitOrder()       │
-└─────────────────────────────────┬───────────────────────────────────────────┘
-                                  │
-┌─────────────────────────────────▼───────────────────────────────────────────┐
-│                             MarketRuntime                                  │
-│  Simulation loop │ Environment │ Agent registry │ Replay │ Runtime fanout  │
-│  manual orders + replay + built-in agents → shared submission path         │
-└─────────────────────────────────┬───────────────────────────────────────────┘
-                                  │
-┌─────────────────────────────────▼───────────────────────────────────────────┐
-│                             EngineService                                  │
-│   Engine thread (single writer) │ PnL tracker │ stats │ sequencing         │
-└─────────────────────────────────┬───────────────────────────────────────────┘
-                                  │
-┌─────────────────────────────────▼───────────────────────────────────────────┐
-│                            MatchingEngine                                  │
-│    Validation → Matching → Book mutations → trade/execution callbacks      │
-└─────────────────────────────────┬───────────────────────────────────────────┘
-                                  │
-┌─────────────────────────────────▼───────────────────────────────────────────┐
-│                          MarketDataPublisher                               │
-│     JSON /ws/market                     Binary /ws/market/bin              │
-└─────────────────────────────────────────────────────────────────────────────┘
++------------------------------------------------------------------------------+
+|                              React Dashboard                                 |
+|  Order Entry | PnL | Sim Controls | Ladder | Tape | Chart | System Health    |
+|                    Zustand Store <- WebSocket <- /ws/market                  |
++-----------------------------------+------------------------------------------+
+                                    | HTTP POST /api/orders
++-----------------------------------v------------------------------------------+
+|                             OrderEntryGateway                                |
+|              JSON parse -> latency stamp -> MarketRuntime::submitOrder()     |
++-----------------------------------+------------------------------------------+
+                                    |
++-----------------------------------v------------------------------------------+
+|                               MarketRuntime                                  |
+|  Simulation loop | Environment | Agent registry | Replay | Runtime fanout     |
+|  manual orders + replay + built-in agents -> shared submission path          |
++-----------------------------------+------------------------------------------+
+                                    |
++-----------------------------------v------------------------------------------+
+|                               EngineService                                  |
+|   Engine thread (single writer) | PnL tracker | stats | sequencing           |
++-----------------------------------+------------------------------------------+
+                                    |
++-----------------------------------v------------------------------------------+
+|                              MatchingEngine                                  |
+|      Validation -> Matching -> Book mutations -> trade/execution callbacks   |
++-----------------------------------+------------------------------------------+
+                                    |
++-----------------------------------v------------------------------------------+
+|                            MarketDataPublisher                               |
+|       JSON /ws/market                     Binary /ws/market/bin              |
++------------------------------------------------------------------------------+
 ```
 
 ### Core Data Structures
@@ -121,34 +121,34 @@ The React frontend (`/frontend`) provides a real-time market-operations interfac
 
 ```text
 mercury/
-├── include/                    # Headers
-│   ├── Order.h                 # Order, Trade, ExecutionResult types
-│   ├── OrderBook.h             # Order book with Abseil ladders + intrusive FIFO levels
-│   ├── MatchingEngine.h        # Price-time priority matching
-│   ├── EngineService.h         # Live engine thread + telemetry
-│   ├── MarketRuntime.h         # Unified simulation/runtime layer
-│   ├── MarketData.h            # Market-data DTOs and sink interfaces
-│   ├── BacktestReport.h        # Backtest summary and artifact writers
-│   ├── MarketDataPublisher.h   # JSON + binary WebSocket publisher
-│   ├── OrderEntryGateway.h     # HTTP order entry handler
-│   ├── BinaryProtocol.h        # Packed binary wire-format structs
-│   ├── ServerApp.h             # Server entrypoint
-│   └── ...
-├── src/                        # Implementations
-│   ├── MatchingEngine.cpp
-│   ├── EngineService.cpp
-│   ├── MarketRuntime.cpp
-│   ├── OrderEntryGateway.cpp
-│   ├── MarketDataPublisher.cpp
-│   ├── ServerApp.cpp
-│   └── main.cpp
-├── scenarios/                  # Versioned market-making lab scenarios
-├── tests/                      # Google Test suites (244 tests)
-├── benchmarks/                 # Optional benchmark target
-├── frontend/                   # React/Vite/TypeScript dashboard
-├── data/                       # Sample CSV inputs
-├── docs/                       # ARCHITECTURE.md, WORKFLOWS.md
-└── AGENTS.md                   # Agent guidance
+|-- include/                    # Headers
+|   |-- Order.h                 # Order, Trade, ExecutionResult types
+|   |-- OrderBook.h             # Order book with Abseil ladders + intrusive FIFO levels
+|   |-- MatchingEngine.h        # Price-time priority matching
+|   |-- EngineService.h         # Live engine thread + telemetry
+|   |-- MarketRuntime.h         # Unified simulation/runtime layer
+|   |-- MarketData.h            # Market-data DTOs and sink interfaces
+|   |-- BacktestReport.h        # Backtest summary and artifact writers
+|   |-- MarketDataPublisher.h   # JSON + binary WebSocket publisher
+|   |-- OrderEntryGateway.h     # HTTP order entry handler
+|   |-- BinaryProtocol.h        # Packed binary wire-format structs
+|   |-- ServerApp.h             # Server entrypoint
+|   `-- ...
+|-- src/                        # Implementations
+|   |-- MatchingEngine.cpp
+|   |-- EngineService.cpp
+|   |-- MarketRuntime.cpp
+|   |-- OrderEntryGateway.cpp
+|   |-- MarketDataPublisher.cpp
+|   |-- ServerApp.cpp
+|   `-- main.cpp
+|-- scenarios/                  # Versioned market-making lab scenarios
+|-- tests/                      # Google Test suites (244 tests)
+|-- benchmarks/                 # Optional benchmark target
+|-- frontend/                   # React/Vite/TypeScript dashboard
+|-- data/                       # Sample CSV inputs
+|-- docs/                       # ARCHITECTURE.md, WORKFLOWS.md
+`-- AGENTS.md                   # Agent guidance
 ```
 
 ## Quick Start
@@ -164,12 +164,12 @@ The backend pulls third-party dependencies with CMake `FetchContent`, including 
 
 ### Run The Live Stack
 
-Terminal 1 — backend:
+Terminal 1 - backend:
 ```powershell
 .\build\mercury.exe --server --sim --host 127.0.0.1 --port 9001 --symbol SIM,AAPL,GOOG
 ```
 
-Terminal 2 — frontend:
+Terminal 2 - frontend:
 ```powershell
 Set-Location frontend
 npm install
@@ -229,7 +229,7 @@ Create a sweep file:
 }
 ```
 
-Run all scenarios as instant backtests:
+Run the sweep as instant backtests:
 
 ```powershell
 .\build\mercury.exe --sweep runs\sweep.json --sim-duration-ms 30000 --backtest-output runs\sweep
@@ -241,8 +241,9 @@ Run all scenarios as instant backtests:
 |----------|--------|-------------|
 | `/api/health` | GET | Server liveness and runtime status |
 | `/api/state` | GET | Engine metadata, market summary, and simulation state |
+| `/api/scenarios` | GET | Built-in live scenario IDs and display names |
 | `/api/orders` | POST | Submit order (limit, market, cancel, modify) |
-| `/api/simulation/control` | POST | Pause, resume, restart, or change volatility/regime |
+| `/api/simulation/control` | POST | Pause/resume/restart, change volatility/regime, apply scenarios, tune agent counts, tune market-maker quoting |
 
 Example order submission:
 
@@ -275,12 +276,37 @@ Force a specific market regime (`calm`, `normal`, or `stressed`):
 }
 ```
 
+Apply a built-in live scenario:
+
+```json
+{
+  "action": "apply_scenario",
+  "scenario": "toxic-flow"
+}
+```
+
+Tune the simulated market-maker population and quote shape:
+
+```json
+{
+  "action": "set_market_maker",
+  "marketMaker": {
+    "levels": 4,
+    "quoteQuantity": 90,
+    "minQuantity": 20,
+    "baseSpreadTicks": 3,
+    "toxicitySensitivity": 1.2,
+    "wakeIntervalMs": 80
+  }
+}
+```
+
 ## WebSocket API
 
 | Path | Format | Snapshot | Events |
 |------|--------|----------|--------|
-| `/ws/market` | JSON text | ✅ on connect | `book_delta`, `trade`, `execution`, `stats`, `pnl`, `sim_state`, `agent_metrics` |
-| `/ws/market/bin` | Binary packed | ❌ | `book_delta`, `trade` |
+| `/ws/market` | JSON text | Yes, on connect | `book_delta`, `trade`, `execution`, `stats`, `pnl`, `sim_state`, `agent_metrics` |
+| `/ws/market/bin` | Binary packed | No | `book_delta`, `trade` |
 
 ### Envelope Shape (JSON)
 
@@ -375,9 +401,9 @@ Benchmarks run on 12-core CPU @ 3.6GHz (Release build):
 | Operation | Latency | Throughput |
 |-----------|---------|------------|
 | Order Insert | 321 ns | 3.1M/sec |
-| Order Match (10 levels) | 1.9 µs | 526K/sec |
-| Order Cancel | 2.7 µs | 370K/sec |
-| Market Sweep (5 levels) | 1.8 µs | 556K/sec |
+| Order Match (10 levels) | 1.9 us | 526K/sec |
+| Order Cancel | 2.7 us | 370K/sec |
+| Market Sweep (5 levels) | 1.8 us | 556K/sec |
 | **Sustained Mixed Load** | 312 ns | **3.2M/sec** |
 
 ```powershell
@@ -416,15 +442,26 @@ npm run build
 
 ## Current V1 Boundaries
 
-- Localhost only, no auth
-- Single book in core engine, but multi-symbol supported via an EngineService registry
-- JSON primary transport, binary secondary for throughput-sensitive consumers
-- Browser writes over HTTP, market data over WebSocket
-- Browser is a thin operator client; the market can stay active without manual orders
-- Instant backtests are headless and CPU-paced; live server simulations remain real-time by default
-- Backtest and sweep artifacts are local files; Mercury is not broker-integrated paper trading
-- Frontend is a separate Vite dev app, not served by C++
-- Python strategy loading is deferred; v1 custom strategies are C++ only
+These boundaries are intentional for the current market-making lab release. They keep Mercury focused on local, repeatable simulation rather than production brokerage infrastructure.
+
+### In Scope
+
+- Localhost market lab for order-book, market-making, replay, and agent-behavior experiments
+- Single-book core engine with multi-symbol orchestration handled by the `EngineService` registry
+- Browser order entry over HTTP and read-only market data over WebSocket
+- JSON as the primary transport, with binary WebSocket frames for throughput-sensitive book/trade consumers
+- Instant headless backtests for fastest possible results and live server simulations that remain real-time by default
+- Local JSON/CSV artifacts for backtests, sweeps, agent attribution, queue analytics, and replay calibration
+- In-process C++ custom agents through the simulation runtime
+
+### Out Of Scope For V1
+
+- Broker connectivity, exchange connectivity, or production paper-trading account integration
+- Authentication, multi-user permissions, hosted deployment, or internet-facing operation
+- Durable database storage beyond local report artifacts
+- Serving the React frontend from the C++ process; the dashboard remains a separate Vite app
+- Python strategy loading or external strategy sandboxes
+- Full binary parity with every JSON market-data event; binary v1 focuses on book deltas and trades
 
 ## License
 

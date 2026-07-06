@@ -338,6 +338,7 @@ HTTP endpoints:
 
 - `GET /api/health`
 - `GET /api/state`
+- `GET /api/scenarios`
 - `POST /api/orders`
 - `POST /api/simulation/control`
 
@@ -424,13 +425,17 @@ Client behavior:
 
 The current v1 boundaries are intentional:
 
-- single-book core engine
+- localhost market lab, not broker-connected paper trading or exchange connectivity
+- single-book core engine, with multi-symbol orchestration handled above the core by `EngineService`
 - symbol only at API and frontend layer
 - JSON primary transport, binary secondary transport for throughput-sensitive consumers
 - HTTP for order submission
 - WebSocket for read-only market data
+- local JSON/CSV artifacts for backtests, sweeps, queue analytics, attribution, and replay calibration
 - separate Vite app for frontend development
 - browser remains a thin operator client rather than the owner of the market loop
+- C++ in-process custom agents only; Python strategy loading and external strategy sandboxes are deferred
+- no authentication, multi-user permissions, hosted deployment, or durable database layer in v1
 
 Do not collapse these boundaries casually during unrelated work.
 
