@@ -65,6 +65,8 @@ Required checks:
 - instant backtests stay CPU-paced and do not block on real-time sleeps
 - `--backtest-output` artifacts stay parseable and aligned with emitted DTO fields
 - `--sweep` applies the same simulation knobs as the single-run CLI path
+- `--scenario`, `--mm-config`, and `--calibrate-replay` use the same JSON field names as sweep runs
+- `agent_metrics` stays additive and does not break snapshot, stats, trade, execution, PnL, or simulation-state consumers
 - frontend store still understands the emitted envelope shape
 - telemetry fields (`engineLatencyNs`, `messagesPerSecond`) are populated correctly
 - queue-position fields stay sourced from the actual intrusive FIFO `PriceLevel` order, not from copied snapshots
@@ -87,11 +89,11 @@ Recommended manual smoke test:
 3. Confirm the ladder and trade tape are active before any manual order is submitted.
 4. Submit a buy or sell order from the browser or with `POST /api/orders`.
 5. Confirm the ladder, trade tape, stats, simulation controls, PnL, and system health card update.
-6. Call `POST /api/simulation/control` with `pause`, `resume`, `set_volatility`, or `set_regime` (`calm`, `normal`, `stressed`) and confirm the UI changes.
+6. Call `POST /api/simulation/control` with `pause`, `resume`, `set_volatility`, `set_regime`, `set_counts`, `set_market_maker`, or `apply_scenario` and confirm the UI changes.
 7. Confirm self-trade highlighting appears in the trade tape.
 8. Refresh the browser and confirm the UI resyncs from a fresh snapshot.
 9. Optionally connect a raw WebSocket client to `/ws/market/bin` and verify binary frames arrive.
-10. Optionally run `.\build\mercury.exe --backtest --sim-seed 42 --sim-duration-ms 30000 --backtest-output .codex-run\baseline` twice and compare summary output.
+10. Optionally run `.\build\mercury.exe --backtest --scenario scenarios\toxic-flow.json --backtest-output .codex-run\toxic-flow` twice and compare summary output.
 11. When changing simulation dynamics, sample `GET /api/state` over a few intervals at `normal` and `high` volatility and confirm spreads and activity increase without 100% to 1000% price jumps over a few seconds.
 
 ## 3. Changing Frontend Dashboard Behavior
@@ -212,7 +214,25 @@ Add Poisson-flow noise traders to stress arrival intensity:
 .\build\mercury.exe --backtest --sim-volatility high --noise-count 3 --sim-duration-ms 30000 --backtest-output runs\high-noise
 ```
 
-The output directory contains `summary.json`, `config.json`, `trades.csv`, `stats.csv`, `pnl.csv`, and `sim_state.csv`.
+The output directory contains `summary.json`, `config.json`, `trades.csv`, `stats.csv`, `pnl.csv`, `sim_state.csv`, `agent_metrics.csv`, and `agent_summary.csv`.
+
+Run a scenario preset:
+
+```powershell
+.\build\mercury.exe --backtest --scenario scenarios\toxic-flow.json --backtest-output runs\toxic-flow
+```
+
+Run with a market-maker config file:
+
+```powershell
+.\build\mercury.exe --backtest --mm-config scenarios\calm-two-sided-market.json --backtest-output runs\custom-mm
+```
+
+Run replay calibration:
+
+```powershell
+.\build\mercury.exe --calibrate-replay data\sample_orders_with_clients.csv --backtest-output runs\replay-calibration
+```
 
 ### Run Backtest Sweep
 

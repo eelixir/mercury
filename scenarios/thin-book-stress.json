@@ -1,0 +1,25 @@
+{
+  "name": "thin-book-stress",
+  "description": "Sparse displayed liquidity with stressed flow for queue and fill-probability analysis.",
+  "symbols": ["SIM"],
+  "simulation": {
+    "seed": 126,
+    "volatility": "high",
+    "durationMs": 30000,
+    "marketMakerCount": 1,
+    "momentumCount": 3,
+    "meanReversionCount": 1,
+    "noiseTraderCount": 3,
+    "stepMs": 50,
+    "publishIntervalMs": 250
+  },
+  "marketMaker": {
+    "levels": 2,
+    "quoteQuantity": 45,
+    "minQuantity": 10,
+    "baseSpreadTicks": 6,
+    "toxicitySensitivity": 1.4,
+    "wakeIntervalMs": 90,
+    "inventorySkewDivisor": 40
+  }
+}

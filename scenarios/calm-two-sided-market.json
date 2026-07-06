@@ -1,0 +1,25 @@
+{
+  "name": "calm-two-sided-market",
+  "description": "Deep, stable two-sided liquidity with low noise and conservative market-maker settings.",
+  "symbols": ["SIM"],
+  "simulation": {
+    "seed": 42,
+    "volatility": "low",
+    "durationMs": 30000,
+    "marketMakerCount": 3,
+    "momentumCount": 1,
+    "meanReversionCount": 2,
+    "noiseTraderCount": 1,
+    "stepMs": 50,
+    "publishIntervalMs": 250
+  },
+  "marketMaker": {
+    "levels": 3,
+    "quoteQuantity": 140,
+    "minQuantity": 30,
+    "baseSpreadTicks": 2,
+    "toxicitySensitivity": 0.7,
+    "wakeIntervalMs": 150,
+    "inventorySkewDivisor": 60
+  }
+}

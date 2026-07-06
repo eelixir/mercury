@@ -17,6 +17,9 @@ namespace Mercury {
         uint64_t replayLoopPauseMs = 1000;
         std::optional<std::string> backtestOutputDir;
         std::optional<std::string> sweepFile;
+        std::optional<std::string> scenarioFile;
+        std::optional<std::string> marketMakerConfigFile;
+        std::optional<std::string> calibrationReplayFile;
         std::vector<std::string> symbols = {"SIM"};
         SimulationConfig simulation;
     };

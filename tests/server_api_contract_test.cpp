@@ -38,6 +38,18 @@ TEST(ServerApiContractTest, StateJsonIncludesSimulationMicrostructureFields) {
     state.limitLambda = 0.03;
     state.cancelLambda = 0.08;
     state.marketableLambda = 0.06;
+    state.marketMaker.levels = 4;
+    state.marketMaker.quoteQuantity = 90;
+    state.marketMaker.baseSpreadTicks = 5;
+
+    AgentMetricsEvent metrics;
+    metrics.symbol = "SIM";
+    metrics.clientId = 1000;
+    metrics.agentName = "PassiveMarketMaker";
+    metrics.agentType = "market_maker";
+    metrics.totalPnL = 12;
+    metrics.averageFillProbability = 0.44;
+    state.agentMetrics.push_back(metrics);
 
     const auto body = helpers::stateToJson(state, 7);
     const auto& simulation = body.at("simulation");
@@ -48,6 +60,9 @@ TEST(ServerApiContractTest, StateJsonIncludesSimulationMicrostructureFields) {
     EXPECT_DOUBLE_EQ(simulation.at("limitLambda").get<double>(), 0.03);
     EXPECT_DOUBLE_EQ(simulation.at("cancelLambda").get<double>(), 0.08);
     EXPECT_DOUBLE_EQ(simulation.at("marketableLambda").get<double>(), 0.06);
+    EXPECT_EQ(simulation.at("marketMaker").at("levels").get<size_t>(), 4u);
+    ASSERT_EQ(body.at("agentMetrics").size(), 1u);
+    EXPECT_EQ(body.at("agentMetrics").at(0).at("agentType").get<std::string>(), "market_maker");
 }
 
 TEST(ServerApiContractTest, OrderRequestParsesSymbolAndLimitOrderShape) {
@@ -152,6 +167,9 @@ TEST(ServerApiContractTest, SimulationStateEnvelopeIncludesRegimeNoiseAndLambdas
     state.limitLambda = 0.044;
     state.cancelLambda = 0.012;
     state.marketableLambda = 0.0048;
+    state.marketMakerLevels = 3;
+    state.marketMakerQuoteQuantity = 80;
+    state.marketMakerBaseSpreadTicks = 4;
 
     const auto envelope = helpers::json::parse(helpers::simStateEnvelope(state));
     const auto& payload = envelope.at("payload");
@@ -162,6 +180,28 @@ TEST(ServerApiContractTest, SimulationStateEnvelopeIncludesRegimeNoiseAndLambdas
     EXPECT_DOUBLE_EQ(payload.at("limitLambda").get<double>(), 0.044);
     EXPECT_DOUBLE_EQ(payload.at("cancelLambda").get<double>(), 0.012);
     EXPECT_DOUBLE_EQ(payload.at("marketableLambda").get<double>(), 0.0048);
+    EXPECT_EQ(payload.at("marketMaker").at("levels").get<size_t>(), 3u);
+}
+
+TEST(ServerApiContractTest, AgentMetricsEnvelopeMatchesJsonWebSocketShape) {
+    AgentMetricsEvent metrics;
+    metrics.sequence = 123;
+    metrics.symbol = "SIM";
+    metrics.clientId = 1000;
+    metrics.agentName = "PassiveMarketMaker";
+    metrics.agentType = "market_maker";
+    metrics.totalPnL = 9;
+    metrics.averageQueuePosition = 2.5;
+    metrics.averageFillProbability = 0.33;
+
+    const auto envelope = helpers::json::parse(helpers::agentMetricsEnvelope(metrics));
+    const auto& payload = envelope.at("payload");
+
+    EXPECT_EQ(envelope.at("type").get<std::string>(), "agent_metrics");
+    EXPECT_EQ(envelope.at("sequence").get<uint64_t>(), 123u);
+    EXPECT_EQ(payload.at("clientId").get<uint64_t>(), 1000u);
+    EXPECT_EQ(payload.at("agentType").get<std::string>(), "market_maker");
+    EXPECT_DOUBLE_EQ(payload.at("averageFillProbability").get<double>(), 0.33);
 }
 
 TEST(ServerApiContractTest, SimulationControlCanForceRegimeForStateEndpoint) {
@@ -181,4 +221,34 @@ TEST(ServerApiContractTest, SimulationControlCanForceRegimeForStateEndpoint) {
     EXPECT_EQ(simulation.at("noiseTraderCount").get<size_t>(), 2u);
     EXPECT_GT(simulation.at("cancelLambda").get<double>(), 0.0);
     EXPECT_GT(simulation.at("marketableLambda").get<double>(), 0.0);
+}
+
+TEST(ServerApiContractTest, SimulationControlCanSetAgentCountsAndMarketMakerConfig) {
+    SimulationConfig config;
+    config.enabled = true;
+
+    MarketRuntime runtime("SIM", config);
+
+    SimulationControl counts;
+    counts.action = "set_counts";
+    counts.hasAgentCounts = true;
+    counts.marketMakerCount = 4;
+    counts.momentumCount = 3;
+    counts.meanReversionCount = 2;
+    counts.noiseTraderCount = 1;
+    ASSERT_TRUE(runtime.applyControl(counts));
+
+    SimulationControl mm;
+    mm.action = "set_market_maker";
+    mm.hasMarketMakerConfig = true;
+    mm.marketMaker.levels = 5;
+    mm.marketMaker.quoteQuantity = 120;
+    mm.marketMaker.baseSpreadTicks = 4;
+    ASSERT_TRUE(runtime.applyControl(mm));
+
+    const auto state = runtime.getState();
+    EXPECT_EQ(state.marketMakerCount, 4u);
+    EXPECT_EQ(state.momentumCount, 3u);
+    EXPECT_EQ(state.marketMaker.levels, 5u);
+    EXPECT_EQ(state.marketMaker.quoteQuantity, 120u);
 }

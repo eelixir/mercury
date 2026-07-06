@@ -84,6 +84,44 @@ export interface SimulationStatePayload {
   limitLambda: number
   cancelLambda: number
   marketableLambda: number
+  marketMaker?: MarketMakerConfigPayload
+}
+
+export interface MarketMakerConfigPayload {
+  levels: number
+  quoteQuantity: number
+  minQuantity: number
+  baseSpreadTicks: number
+  toxicitySensitivity: number
+  wakeIntervalMs: number
+  inventorySkewDivisor?: number
+}
+
+export interface AgentMetricsPayload {
+  clientId: number
+  agentName: string
+  agentType: string
+  timestamp: number
+  simulationTimestamp: number
+  wakeCount: number
+  intentCount: number
+  submittedCount: number
+  limitOrderCount: number
+  marketOrderCount: number
+  cancelCount: number
+  modifyCount: number
+  fillCount: number
+  filledQuantity: number
+  restingQuantity: number
+  liveOrderCount: number
+  netPosition: number
+  realizedPnL: number
+  unrealizedPnL: number
+  totalPnL: number
+  averageQueuePosition: number
+  averageQuantityAhead: number
+  averageFillProbability: number
+  averageTimeToFillMs: number
 }
 
 export interface ExecutionPayload {
@@ -137,6 +175,12 @@ export type MarketEnvelope =
       sequence: number
       symbol: string
       payload: SimulationStatePayload
+    }
+  | {
+      type: 'agent_metrics'
+      sequence: number
+      symbol: string
+      payload: AgentMetricsPayload
     }
 
 export interface ExecutionTrade {

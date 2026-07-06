@@ -130,6 +130,10 @@ namespace Mercury {
         broadcast(helpers::simStateEnvelope(state));
     }
 
+    void MarketDataPublisher::onAgentMetrics(const AgentMetricsEvent& metrics) {
+        broadcast(helpers::agentMetricsEnvelope(metrics));
+    }
+
     void MarketDataPublisher::broadcast(std::string message) {
         uWS::Loop* loop = nullptr;
         uWS::App* app = nullptr;

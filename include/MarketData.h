@@ -136,6 +136,41 @@ namespace Mercury {
         double limitLambda = 0.0;
         double cancelLambda = 0.0;
         double marketableLambda = 0.0;
+        size_t marketMakerLevels = 0;
+        uint64_t marketMakerQuoteQuantity = 0;
+        uint64_t marketMakerMinQuantity = 0;
+        int64_t marketMakerBaseSpreadTicks = 0;
+        double marketMakerToxicitySensitivity = 0.0;
+        uint64_t marketMakerWakeIntervalMs = 0;
+    };
+
+    struct AgentMetricsEvent {
+        uint64_t sequence = 0;
+        std::string symbol;
+        uint64_t clientId = 0;
+        std::string agentName;
+        std::string agentType;
+        uint64_t timestamp = 0;
+        uint64_t simulationTimestamp = 0;
+        uint64_t wakeCount = 0;
+        uint64_t intentCount = 0;
+        uint64_t submittedCount = 0;
+        uint64_t limitOrderCount = 0;
+        uint64_t marketOrderCount = 0;
+        uint64_t cancelCount = 0;
+        uint64_t modifyCount = 0;
+        uint64_t fillCount = 0;
+        uint64_t filledQuantity = 0;
+        uint64_t restingQuantity = 0;
+        size_t liveOrderCount = 0;
+        int64_t netPosition = 0;
+        int64_t realizedPnL = 0;
+        int64_t unrealizedPnL = 0;
+        int64_t totalPnL = 0;
+        double averageQueuePosition = 0.0;
+        double averageQuantityAhead = 0.0;
+        double averageFillProbability = 0.0;
+        double averageTimeToFillMs = 0.0;
     };
 
     class MarketDataSink {
@@ -148,6 +183,7 @@ namespace Mercury {
         virtual void onPnLEvent(const PnLEvent& pnl) = 0;
         virtual void onExecutionEvent(const ExecutionEvent& /*execution*/) {}
         virtual void onSimulationState(const SimulationStateEvent& /*state*/) {}
+        virtual void onAgentMetrics(const AgentMetricsEvent& /*metrics*/) {}
     };
 
 }

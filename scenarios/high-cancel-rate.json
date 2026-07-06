@@ -1,0 +1,25 @@
+{
+  "name": "high-cancel-rate",
+  "description": "Noisy order flow with frequent cancels to test book churn and queue decay.",
+  "symbols": ["SIM"],
+  "simulation": {
+    "seed": 168,
+    "volatility": "normal",
+    "durationMs": 30000,
+    "marketMakerCount": 3,
+    "momentumCount": 1,
+    "meanReversionCount": 2,
+    "noiseTraderCount": 5,
+    "stepMs": 50,
+    "publishIntervalMs": 250
+  },
+  "marketMaker": {
+    "levels": 3,
+    "quoteQuantity": 90,
+    "minQuantity": 20,
+    "baseSpreadTicks": 3,
+    "toxicitySensitivity": 1.1,
+    "wakeIntervalMs": 80,
+    "inventorySkewDivisor": 50
+  }
+}

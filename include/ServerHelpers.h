@@ -175,6 +175,36 @@ namespace Mercury {
         }
 
         inline json stateToJson(const MarketRuntimeState& state, uint64_t connections) {
+            json agentMetrics = json::array();
+            for (const auto& metrics : state.agentMetrics) {
+                agentMetrics.push_back(json{
+                    {"symbol", metrics.symbol},
+                    {"clientId", metrics.clientId},
+                    {"agentName", metrics.agentName},
+                    {"agentType", metrics.agentType},
+                    {"simulationTimestamp", metrics.simulationTimestamp},
+                    {"wakeCount", metrics.wakeCount},
+                    {"intentCount", metrics.intentCount},
+                    {"submittedCount", metrics.submittedCount},
+                    {"limitOrderCount", metrics.limitOrderCount},
+                    {"marketOrderCount", metrics.marketOrderCount},
+                    {"cancelCount", metrics.cancelCount},
+                    {"modifyCount", metrics.modifyCount},
+                    {"fillCount", metrics.fillCount},
+                    {"filledQuantity", metrics.filledQuantity},
+                    {"restingQuantity", metrics.restingQuantity},
+                    {"liveOrderCount", metrics.liveOrderCount},
+                    {"netPosition", metrics.netPosition},
+                    {"realizedPnL", metrics.realizedPnL},
+                    {"unrealizedPnL", metrics.unrealizedPnL},
+                    {"totalPnL", metrics.totalPnL},
+                    {"averageQueuePosition", metrics.averageQueuePosition},
+                    {"averageQuantityAhead", metrics.averageQuantityAhead},
+                    {"averageFillProbability", metrics.averageFillProbability},
+                    {"averageTimeToFillMs", metrics.averageTimeToFillMs}
+                });
+            }
+
             return json{
                 {"running", state.running},
                 {"replayActive", state.replayActive},
@@ -207,8 +237,18 @@ namespace Mercury {
                     {"regime", state.regime},
                     {"limitLambda", state.limitLambda},
                     {"cancelLambda", state.cancelLambda},
-                    {"marketableLambda", state.marketableLambda}
-                }}
+                    {"marketableLambda", state.marketableLambda},
+                    {"marketMaker", {
+                        {"levels", state.marketMaker.levels},
+                        {"quoteQuantity", state.marketMaker.quoteQuantity},
+                        {"minQuantity", state.marketMaker.minQuantity},
+                        {"baseSpreadTicks", state.marketMaker.baseSpreadTicks},
+                        {"toxicitySensitivity", state.marketMaker.toxicitySensitivity},
+                        {"wakeIntervalMs", state.marketMaker.wakeIntervalMs},
+                        {"inventorySkewDivisor", state.marketMaker.inventorySkewDivisor}
+                    }}
+                }},
+                {"agentMetrics", std::move(agentMetrics)}
             };
         }
 
@@ -231,9 +271,47 @@ namespace Mercury {
                 {"regime", state.regime},
                 {"limitLambda", state.limitLambda},
                 {"cancelLambda", state.cancelLambda},
-                {"marketableLambda", state.marketableLambda}
+                {"marketableLambda", state.marketableLambda},
+                {"marketMaker", {
+                    {"levels", state.marketMakerLevels},
+                    {"quoteQuantity", state.marketMakerQuoteQuantity},
+                    {"minQuantity", state.marketMakerMinQuantity},
+                    {"baseSpreadTicks", state.marketMakerBaseSpreadTicks},
+                    {"toxicitySensitivity", state.marketMakerToxicitySensitivity},
+                    {"wakeIntervalMs", state.marketMakerWakeIntervalMs}
+                }}
             };
             return envelopeToJson("sim_state", state.sequence, state.symbol, std::move(payload)).dump();
+        }
+
+        inline std::string agentMetricsEnvelope(const AgentMetricsEvent& metrics) {
+            json payload{
+                {"clientId", metrics.clientId},
+                {"agentName", metrics.agentName},
+                {"agentType", metrics.agentType},
+                {"timestamp", metrics.timestamp},
+                {"simulationTimestamp", metrics.simulationTimestamp},
+                {"wakeCount", metrics.wakeCount},
+                {"intentCount", metrics.intentCount},
+                {"submittedCount", metrics.submittedCount},
+                {"limitOrderCount", metrics.limitOrderCount},
+                {"marketOrderCount", metrics.marketOrderCount},
+                {"cancelCount", metrics.cancelCount},
+                {"modifyCount", metrics.modifyCount},
+                {"fillCount", metrics.fillCount},
+                {"filledQuantity", metrics.filledQuantity},
+                {"restingQuantity", metrics.restingQuantity},
+                {"liveOrderCount", metrics.liveOrderCount},
+                {"netPosition", metrics.netPosition},
+                {"realizedPnL", metrics.realizedPnL},
+                {"unrealizedPnL", metrics.unrealizedPnL},
+                {"totalPnL", metrics.totalPnL},
+                {"averageQueuePosition", metrics.averageQueuePosition},
+                {"averageQuantityAhead", metrics.averageQuantityAhead},
+                {"averageFillProbability", metrics.averageFillProbability},
+                {"averageTimeToFillMs", metrics.averageTimeToFillMs}
+            };
+            return envelopeToJson("agent_metrics", metrics.sequence, metrics.symbol, std::move(payload)).dump();
         }
 
         // ----------------------------------------------------------------

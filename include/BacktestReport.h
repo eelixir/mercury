@@ -9,9 +9,11 @@
 #include <cstdint>
 #include <fstream>
 #include <iomanip>
+#include <map>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace Mercury {
@@ -21,6 +23,44 @@ namespace Mercury {
         std::vector<StatsEvent> stats;
         std::vector<PnLEvent> pnl;
         std::vector<SimulationStateEvent> simStates;
+        std::vector<AgentMetricsEvent> agentMetrics;
+    };
+
+    struct AgentAttributionSummary {
+        std::string symbol;
+        uint64_t clientId = 0;
+        std::string agentName;
+        std::string agentType;
+        uint64_t wakeCount = 0;
+        uint64_t submittedCount = 0;
+        uint64_t limitOrderCount = 0;
+        uint64_t marketOrderCount = 0;
+        uint64_t cancelCount = 0;
+        uint64_t modifyCount = 0;
+        uint64_t fillCount = 0;
+        uint64_t filledQuantity = 0;
+        uint64_t restingQuantity = 0;
+        size_t liveOrderCount = 0;
+        int64_t netPosition = 0;
+        int64_t realizedPnL = 0;
+        int64_t unrealizedPnL = 0;
+        int64_t totalPnL = 0;
+        double averageQueuePosition = 0.0;
+        double averageQuantityAhead = 0.0;
+        double averageFillProbability = 0.0;
+        double averageTimeToFillMs = 0.0;
+        double adverseSelectionTicks = 0.0;
+        double adverseSelectionBps = 0.0;
+    };
+
+    struct QueueAnalyticsSummary {
+        uint64_t samples = 0;
+        uint64_t liveOrderSamples = 0;
+        double averageQueuePosition = 0.0;
+        double averageQuantityAhead = 0.0;
+        double averageFillProbability = 0.0;
+        double averageTimeToFillMs = 0.0;
+        uint64_t averageRestingQuantity = 0;
     };
 
     struct BacktestSummary {
@@ -49,9 +89,46 @@ namespace Mercury {
         size_t momentumCount = 0;
         size_t meanReversionCount = 0;
         size_t noiseTraderCount = 0;
+        int64_t finalTotalPnL = 0;
+        QueueAnalyticsSummary queueAnalytics;
+        std::vector<AgentAttributionSummary> agents;
     };
 
+    inline nlohmann::json agentSummaryToJson(const AgentAttributionSummary& agent) {
+        return {
+            {"symbol", agent.symbol},
+            {"clientId", agent.clientId},
+            {"agentName", agent.agentName},
+            {"agentType", agent.agentType},
+            {"wakeCount", agent.wakeCount},
+            {"submittedCount", agent.submittedCount},
+            {"limitOrderCount", agent.limitOrderCount},
+            {"marketOrderCount", agent.marketOrderCount},
+            {"cancelCount", agent.cancelCount},
+            {"modifyCount", agent.modifyCount},
+            {"fillCount", agent.fillCount},
+            {"filledQuantity", agent.filledQuantity},
+            {"restingQuantity", agent.restingQuantity},
+            {"liveOrderCount", agent.liveOrderCount},
+            {"netPosition", agent.netPosition},
+            {"realizedPnL", agent.realizedPnL},
+            {"unrealizedPnL", agent.unrealizedPnL},
+            {"totalPnL", agent.totalPnL},
+            {"averageQueuePosition", agent.averageQueuePosition},
+            {"averageQuantityAhead", agent.averageQuantityAhead},
+            {"averageFillProbability", agent.averageFillProbability},
+            {"averageTimeToFillMs", agent.averageTimeToFillMs},
+            {"adverseSelectionTicks", agent.adverseSelectionTicks},
+            {"adverseSelectionBps", agent.adverseSelectionBps}
+        };
+    }
+
     inline nlohmann::json backtestSummaryToJson(const BacktestSummary& summary) {
+        nlohmann::json agents = nlohmann::json::array();
+        for (const auto& agent : summary.agents) {
+            agents.push_back(agentSummaryToJson(agent));
+        }
+
         return {
             {"name", summary.name},
             {"clockMode", summary.clockMode},
@@ -74,12 +151,23 @@ namespace Mercury {
             {"maxDrawdownBps", summary.maxDrawdownBps},
             {"finalRegime", summary.finalRegime},
             {"finalToxicityScore", summary.finalToxicityScore},
-            {"agents", {
+            {"finalTotalPnL", summary.finalTotalPnL},
+            {"agentCounts", {
                 {"marketMakerCount", summary.marketMakerCount},
                 {"momentumCount", summary.momentumCount},
                 {"meanReversionCount", summary.meanReversionCount},
                 {"noiseTraderCount", summary.noiseTraderCount}
-            }}
+            }},
+            {"queueAnalytics", {
+                {"samples", summary.queueAnalytics.samples},
+                {"liveOrderSamples", summary.queueAnalytics.liveOrderSamples},
+                {"averageQueuePosition", summary.queueAnalytics.averageQueuePosition},
+                {"averageQuantityAhead", summary.queueAnalytics.averageQuantityAhead},
+                {"averageFillProbability", summary.queueAnalytics.averageFillProbability},
+                {"averageTimeToFillMs", summary.queueAnalytics.averageTimeToFillMs},
+                {"averageRestingQuantity", summary.queueAnalytics.averageRestingQuantity}
+            }},
+            {"agents", std::move(agents)}
         };
     }
 
@@ -136,6 +224,80 @@ namespace Mercury {
             const auto& state = events.simStates.back();
             summary.finalRegime = state.regime;
             summary.finalToxicityScore = state.toxicityScore;
+        }
+
+        std::map<std::pair<std::string, uint64_t>, AgentAttributionSummary> byAgent;
+        double queuePositionTotal = 0.0;
+        double quantityAheadTotal = 0.0;
+        double fillProbabilityTotal = 0.0;
+        double fillAgeTotal = 0.0;
+        uint64_t restingQuantityTotal = 0;
+
+        for (const auto& metrics : events.agentMetrics) {
+            auto& agent = byAgent[{metrics.symbol, metrics.clientId}];
+            agent.symbol = metrics.symbol;
+            agent.clientId = metrics.clientId;
+            agent.agentName = metrics.agentName;
+            agent.agentType = metrics.agentType;
+            agent.wakeCount = metrics.wakeCount;
+            agent.submittedCount = metrics.submittedCount;
+            agent.limitOrderCount = metrics.limitOrderCount;
+            agent.marketOrderCount = metrics.marketOrderCount;
+            agent.cancelCount = metrics.cancelCount;
+            agent.modifyCount = metrics.modifyCount;
+            agent.fillCount = metrics.fillCount;
+            agent.filledQuantity = metrics.filledQuantity;
+            agent.restingQuantity = metrics.restingQuantity;
+            agent.liveOrderCount = metrics.liveOrderCount;
+            agent.netPosition = metrics.netPosition;
+            agent.realizedPnL = metrics.realizedPnL;
+            agent.unrealizedPnL = metrics.unrealizedPnL;
+            agent.totalPnL = metrics.totalPnL;
+            agent.averageQueuePosition = metrics.averageQueuePosition;
+            agent.averageQuantityAhead = metrics.averageQuantityAhead;
+            agent.averageFillProbability = metrics.averageFillProbability;
+            agent.averageTimeToFillMs = metrics.averageTimeToFillMs;
+
+            ++summary.queueAnalytics.samples;
+            if (metrics.liveOrderCount > 0) {
+                ++summary.queueAnalytics.liveOrderSamples;
+                queuePositionTotal += metrics.averageQueuePosition;
+                quantityAheadTotal += metrics.averageQuantityAhead;
+                fillProbabilityTotal += metrics.averageFillProbability;
+                fillAgeTotal += metrics.averageTimeToFillMs;
+                restingQuantityTotal += metrics.restingQuantity;
+            }
+        }
+
+        if (summary.queueAnalytics.liveOrderSamples > 0) {
+            const double n = static_cast<double>(summary.queueAnalytics.liveOrderSamples);
+            summary.queueAnalytics.averageQueuePosition = queuePositionTotal / n;
+            summary.queueAnalytics.averageQuantityAhead = quantityAheadTotal / n;
+            summary.queueAnalytics.averageFillProbability = fillProbabilityTotal / n;
+            summary.queueAnalytics.averageTimeToFillMs = fillAgeTotal / n;
+            summary.queueAnalytics.averageRestingQuantity =
+                restingQuantityTotal / summary.queueAnalytics.liveOrderSamples;
+        }
+
+        std::map<std::pair<std::string, uint64_t>, double> adverseTicksByAgent;
+        const int64_t referenceMid = summary.lastMidPrice > 0 ? summary.lastMidPrice : summary.maxMidPrice;
+        if (referenceMid > 0) {
+            for (const auto& trade : events.trades) {
+                adverseTicksByAgent[{trade.symbol, trade.buyClientId}] +=
+                    static_cast<double>(trade.price - referenceMid) * static_cast<double>(trade.quantity);
+                adverseTicksByAgent[{trade.symbol, trade.sellClientId}] +=
+                    static_cast<double>(referenceMid - trade.price) * static_cast<double>(trade.quantity);
+            }
+        }
+
+        for (auto& [key, agent] : byAgent) {
+            agent.adverseSelectionTicks = adverseTicksByAgent[key];
+            if (agent.filledQuantity > 0 && referenceMid > 0) {
+                const double avgTicks = agent.adverseSelectionTicks / static_cast<double>(agent.filledQuantity);
+                agent.adverseSelectionBps = avgTicks / static_cast<double>(referenceMid) * 10000.0;
+            }
+            summary.finalTotalPnL += agent.totalPnL;
+            summary.agents.push_back(agent);
         }
 
         return summary;
@@ -223,7 +385,7 @@ namespace Mercury {
 
     inline void writeSimStateCsv(const std::string& path, const std::vector<SimulationStateEvent>& states) {
         std::ostringstream out;
-        out << "sequence,symbol,enabled,running,paused,clockMode,speed,volatility,simulationTimestamp,marketMakerCount,momentumCount,meanReversionCount,noiseTraderCount,realizedVolatilityBps,averageSpread,toxicityScore,regime,limitLambda,cancelLambda,marketableLambda\n";
+        out << "sequence,symbol,enabled,running,paused,clockMode,speed,volatility,simulationTimestamp,marketMakerCount,momentumCount,meanReversionCount,noiseTraderCount,realizedVolatilityBps,averageSpread,toxicityScore,regime,limitLambda,cancelLambda,marketableLambda,marketMakerLevels,marketMakerQuoteQuantity,marketMakerMinQuantity,marketMakerBaseSpreadTicks,marketMakerToxicitySensitivity,marketMakerWakeIntervalMs\n";
         for (const auto& state : states) {
             out << state.sequence << ','
                 << csvEscape(state.symbol) << ','
@@ -244,7 +406,79 @@ namespace Mercury {
                 << csvEscape(state.regime) << ','
                 << state.limitLambda << ','
                 << state.cancelLambda << ','
-                << state.marketableLambda << '\n';
+                << state.marketableLambda << ','
+                << state.marketMakerLevels << ','
+                << state.marketMakerQuoteQuantity << ','
+                << state.marketMakerMinQuantity << ','
+                << state.marketMakerBaseSpreadTicks << ','
+                << state.marketMakerToxicitySensitivity << ','
+                << state.marketMakerWakeIntervalMs << '\n';
+        }
+        writeTextFile(path, out.str());
+    }
+
+    inline void writeAgentMetricsCsv(const std::string& path, const std::vector<AgentMetricsEvent>& metricsEvents) {
+        std::ostringstream out;
+        out << "sequence,symbol,clientId,agentName,agentType,timestamp,simulationTimestamp,wakeCount,intentCount,submittedCount,limitOrderCount,marketOrderCount,cancelCount,modifyCount,fillCount,filledQuantity,restingQuantity,liveOrderCount,netPosition,realizedPnL,unrealizedPnL,totalPnL,averageQueuePosition,averageQuantityAhead,averageFillProbability,averageTimeToFillMs\n";
+        for (const auto& metrics : metricsEvents) {
+            out << metrics.sequence << ','
+                << csvEscape(metrics.symbol) << ','
+                << metrics.clientId << ','
+                << csvEscape(metrics.agentName) << ','
+                << csvEscape(metrics.agentType) << ','
+                << metrics.timestamp << ','
+                << metrics.simulationTimestamp << ','
+                << metrics.wakeCount << ','
+                << metrics.intentCount << ','
+                << metrics.submittedCount << ','
+                << metrics.limitOrderCount << ','
+                << metrics.marketOrderCount << ','
+                << metrics.cancelCount << ','
+                << metrics.modifyCount << ','
+                << metrics.fillCount << ','
+                << metrics.filledQuantity << ','
+                << metrics.restingQuantity << ','
+                << metrics.liveOrderCount << ','
+                << metrics.netPosition << ','
+                << metrics.realizedPnL << ','
+                << metrics.unrealizedPnL << ','
+                << metrics.totalPnL << ','
+                << metrics.averageQueuePosition << ','
+                << metrics.averageQuantityAhead << ','
+                << metrics.averageFillProbability << ','
+                << metrics.averageTimeToFillMs << '\n';
+        }
+        writeTextFile(path, out.str());
+    }
+
+    inline void writeAgentSummaryCsv(const std::string& path, const std::vector<AgentAttributionSummary>& agents) {
+        std::ostringstream out;
+        out << "symbol,clientId,agentName,agentType,wakeCount,submittedCount,limitOrderCount,marketOrderCount,cancelCount,modifyCount,fillCount,filledQuantity,restingQuantity,liveOrderCount,netPosition,realizedPnL,unrealizedPnL,totalPnL,averageQueuePosition,averageQuantityAhead,averageFillProbability,averageTimeToFillMs,adverseSelectionTicks,adverseSelectionBps\n";
+        for (const auto& agent : agents) {
+            out << csvEscape(agent.symbol) << ','
+                << agent.clientId << ','
+                << csvEscape(agent.agentName) << ','
+                << csvEscape(agent.agentType) << ','
+                << agent.wakeCount << ','
+                << agent.submittedCount << ','
+                << agent.limitOrderCount << ','
+                << agent.marketOrderCount << ','
+                << agent.cancelCount << ','
+                << agent.modifyCount << ','
+                << agent.fillCount << ','
+                << agent.filledQuantity << ','
+                << agent.restingQuantity << ','
+                << agent.liveOrderCount << ','
+                << agent.netPosition << ','
+                << agent.realizedPnL << ','
+                << agent.unrealizedPnL << ','
+                << agent.totalPnL << ','
+                << agent.averageQueuePosition << ','
+                << agent.averageQuantityAhead << ','
+                << agent.averageFillProbability << ','
+                << agent.averageTimeToFillMs << ','
+                << agent.adverseSelectionTicks << ','
+                << agent.adverseSelectionBps << '\n';
         }
         writeTextFile(path, out.str());
     }

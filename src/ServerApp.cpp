@@ -82,6 +82,12 @@ namespace Mercury {
                 event.limitLambda = state.limitLambda;
                 event.cancelLambda = state.cancelLambda;
                 event.marketableLambda = state.marketableLambda;
+                event.marketMakerLevels = state.marketMaker.levels;
+                event.marketMakerQuoteQuantity = state.marketMaker.quoteQuantity;
+                event.marketMakerMinQuantity = state.marketMaker.minQuantity;
+                event.marketMakerBaseSpreadTicks = state.marketMaker.baseSpreadTicks;
+                event.marketMakerToxicitySensitivity = state.marketMaker.toxicitySensitivity;
+                event.marketMakerWakeIntervalMs = state.marketMaker.wakeIntervalMs;
                 ws->send(simStateEnvelope(event), uWS::OpCode::TEXT);
             }
         };
@@ -107,6 +113,18 @@ namespace Mercury {
             writeJson(res, "200 OK", stateToJson(runtime.getState(), publisher.connectionCount()));
         });
 
+        app.get("/api/scenarios", [](auto* res, auto* /*req*/) {
+            writeJson(res, "200 OK", json{
+                {"scenarios", json::array({
+                    json{{"id", "calm-two-sided-market"}, {"name", "Calm Two-Sided Market"}},
+                    json{{"id", "toxic-flow"}, {"name", "Toxic Flow"}},
+                    json{{"id", "thin-book-stress"}, {"name", "Thin Book Stress"}},
+                    json{{"id", "high-cancel-rate"}, {"name", "High Cancel Rate"}},
+                    json{{"id", "momentum-burst"}, {"name", "Momentum Burst"}}
+                })}
+            });
+        });
+
         gateway.attach(app);
 
         app.post("/api/simulation/control", [&runtime](auto* res, auto* /*req*/) {
@@ -127,6 +145,32 @@ namespace Mercury {
                     SimulationControl control;
                     control.action = parsed.value("action", std::string());
                     control.volatility = parsed.value("volatility", std::string("normal"));
+                    control.scenario = parsed.value("scenario", std::string());
+
+                    if (parsed.contains("marketMakerCount") ||
+                        parsed.contains("momentumCount") ||
+                        parsed.contains("meanReversionCount") ||
+                        parsed.contains("noiseTraderCount")) {
+                        const auto current = runtime.getState();
+                        control.hasAgentCounts = true;
+                        control.marketMakerCount = parsed.value("marketMakerCount", current.marketMakerCount);
+                        control.momentumCount = parsed.value("momentumCount", current.momentumCount);
+                        control.meanReversionCount = parsed.value("meanReversionCount", current.meanReversionCount);
+                        control.noiseTraderCount = parsed.value("noiseTraderCount", current.noiseTraderCount);
+                    }
+
+                    if (parsed.contains("marketMaker") && parsed.at("marketMaker").is_object()) {
+                        const auto current = runtime.getState().marketMaker;
+                        const auto& mm = parsed.at("marketMaker");
+                        control.hasMarketMakerConfig = true;
+                        control.marketMaker.levels = mm.value("levels", current.levels);
+                        control.marketMaker.quoteQuantity = mm.value("quoteQuantity", current.quoteQuantity);
+                        control.marketMaker.minQuantity = mm.value("minQuantity", current.minQuantity);
+                        control.marketMaker.baseSpreadTicks = mm.value("baseSpreadTicks", current.baseSpreadTicks);
+                        control.marketMaker.toxicitySensitivity = mm.value("toxicitySensitivity", current.toxicitySensitivity);
+                        control.marketMaker.wakeIntervalMs = mm.value("wakeIntervalMs", current.wakeIntervalMs);
+                        control.marketMaker.inventorySkewDivisor = mm.value("inventorySkewDivisor", current.inventorySkewDivisor);
+                    }
 
                     if (!runtime.applyControl(control)) {
                         writeJson(res, "400 Bad Request", json{

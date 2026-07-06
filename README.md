@@ -12,7 +12,7 @@ The intended use case is experimentation: compare liquidity-provision settings, 
 - **3.2M+ orders/sec** sustained throughput
 - **~320 ns** average order insertion latency
 - **O(1)** order lookup, insertion, and cancellation
-- **242** backend tests, all passing
+- **244** backend tests, all passing
 - **Nanosecond** gateway-to-engine latency instrumentation
 
 ## Features
@@ -24,8 +24,11 @@ The intended use case is experimentation: compare liquidity-provision settings, 
 - **Risk Management:** Pre-trade risk checks with position/exposure limits
 - **P&L Tracking:** Realized and unrealized P&L with FIFO cost basis
 - **Unified Market Runtime:** One runtime for manual orders, replay, built-in agents, instant backtests, and live real-time simulation
-- **Backtest Artifacts:** Local JSON/CSV output for run summary, config, trades, stats, P&L, and simulation state
-- **Parameter Sweeps:** JSON-driven batch runner for comparing market-maker counts, volatility presets, seeds, and flow mixes
+- **Backtest Artifacts:** Local JSON/CSV output for run summary, config, trades, stats, P&L, simulation state, agent attribution, and queue analytics
+- **Parameter Sweeps:** JSON-driven batch runner for comparing market-maker counts, volatility presets, seeds, flow mixes, P&L, drawdown, and fill quality
+- **Scenario Presets:** Versioned JSON scenarios for calm books, toxic flow, thin-book stress, high-cancel churn, and momentum bursts
+- **Market-Maker Tuning:** Runtime and file-driven controls for quote levels, spread, size, wake interval, toxicity sensitivity, and inventory skew
+- **Replay Calibration:** Replay CSV calibration reports comparing target order mix and quantity profile with observed simulated output
 - **Built-In Agents:** Passive market maker, aggressive momentum trader, mean-reversion bot, Poisson-flow noise trader
 - **Advanced Microstructure:** Queue-position-aware agents, deeper multi-level market-maker quoting, and toxicity-driven spread widening
 - **Regime Manager:** Auto-detected `calm`/`normal`/`stressed` regimes with explicit Poisson λ controls for limit, cancel, and marketable arrival rates, plus Pareto order-size dispersion for whale-vs-retail flow
@@ -106,7 +109,8 @@ The React frontend (`/frontend`) provides a real-time market-operations interfac
 | **Stats Strip** | Bid, ask, mid, spread, trades, volume, orders, levels |
 | **Order Entry** | Limit/market/cancel/modify with buy/sell toggle, price, qty, TIF |
 | **PnL Card** | Net position, total/realized/unrealized P&L |
-| **Simulation Controls** | Pause/resume, restart, volatility preset, runtime state |
+| **Simulation Controls** | Pause/resume, restart, volatility/regime, scenarios, agent counts, market-maker tuning |
+| **Lab View** | Import backtest artifacts and inspect P&L, inventory, mid/spread, toxicity, queue metrics, and agent attribution |
 | **System Health** | Engine latency, throughput, connection state |
 | **Mid-Price Chart** | Lightweight-charts line view of recent mid-price evolution |
 | **Order Book Ladder** | L2 depth, asks above and bids below |
@@ -138,7 +142,8 @@ mercury/
 │   ├── MarketDataPublisher.cpp
 │   ├── ServerApp.cpp
 │   └── main.cpp
-├── tests/                      # Google Test suites (242 tests)
+├── scenarios/                  # Versioned market-making lab scenarios
+├── tests/                      # Google Test suites (244 tests)
 ├── benchmarks/                 # Optional benchmark target
 ├── frontend/                   # React/Vite/TypeScript dashboard
 ├── data/                       # Sample CSV inputs
@@ -191,7 +196,25 @@ Open `http://127.0.0.1:5173`. Vite proxies `/api` and `/ws` to the backend.
 .\build\mercury.exe --backtest --sim-seed 42 --sim-duration-ms 30000 --sim-volatility normal --backtest-output runs\baseline
 ```
 
-Artifacts include `summary.json`, `config.json`, `trades.csv`, `stats.csv`, `pnl.csv`, and `sim_state.csv`.
+Artifacts include `summary.json`, `config.json`, `trades.csv`, `stats.csv`, `pnl.csv`, `sim_state.csv`, `agent_metrics.csv`, and `agent_summary.csv`.
+
+Run a preset scenario:
+
+```powershell
+.\build\mercury.exe --backtest --scenario scenarios\toxic-flow.json --backtest-output runs\toxic-flow
+```
+
+Run with a market-maker config file:
+
+```powershell
+.\build\mercury.exe --backtest --mm-config scenarios\calm-two-sided-market.json --backtest-output runs\custom-mm
+```
+
+Calibrate against replay flow:
+
+```powershell
+.\build\mercury.exe --calibrate-replay data\sample_orders_with_clients.csv --backtest-output runs\replay-calibration
+```
 
 ### Run A Parameter Sweep
 
@@ -256,7 +279,7 @@ Force a specific market regime (`calm`, `normal`, or `stressed`):
 
 | Path | Format | Snapshot | Events |
 |------|--------|----------|--------|
-| `/ws/market` | JSON text | ✅ on connect | `book_delta`, `trade`, `execution`, `stats`, `pnl`, `sim_state` |
+| `/ws/market` | JSON text | ✅ on connect | `book_delta`, `trade`, `execution`, `stats`, `pnl`, `sim_state`, `agent_metrics` |
 | `/ws/market/bin` | Binary packed | ❌ | `book_delta`, `trade` |
 
 ### Envelope Shape (JSON)
@@ -294,6 +317,7 @@ Force a specific market regime (`calm`, `normal`, or `stressed`):
 - realized volatility and average spread summaries
 - toxicity score, measuring recent sweep-like flow versus displayed top-book liquidity
 - current market regime (`calm`, `normal`, `stressed`) and the active Poisson arrival intensities (`limitLambda`, `cancelLambda`, `marketableLambda`), all expressed as expected events per millisecond
+- live market-maker configuration and latest agent attribution metrics
 
 ### Binary Protocol
 
@@ -325,6 +349,9 @@ All fields are little-endian (x86/x64 host order).
 | `--backtest` | | Run headless simulation as fast as possible |
 | `--backtest-output <dir>` | | Write backtest summary/config/trade/stat/PnL/simulation-state artifacts |
 | `--sweep <file>` | | Run multiple instant backtests from a JSON sweep file |
+| `--scenario <file>` | | Apply a scenario JSON file to server, headless, backtest, or sweep base settings |
+| `--mm-config <file>` | | Apply market-maker quote configuration from JSON |
+| `--calibrate-replay <file>` | | Run instant replay calibration and write `calibration.json` when output is enabled |
 | `--host <addr>` | | Bind address (default `127.0.0.1`) |
 | `--port <port>` | `-p` | Listen port (default `9001`) |
 | `--symbol <name>` | | Comma-separated list of symbols (default `SIM`) |
@@ -361,7 +388,7 @@ cmake --build build
 
 ## Testing
 
-242 unit tests covering:
+244 unit tests covering:
 - Order book operations (insert, remove, update)
 - Matching engine (limit, market, IOC, FOK)
 - Risk manager (position limits, exposure limits)
@@ -370,7 +397,7 @@ cmake --build build
 - Server/API contract smoke tests for state JSON, order parsing, order responses, and WebSocket envelopes
 - Unified simulation runtime and agent fanout
 - Instant backtest clock behavior without real-time pacing
-- Backtest report metrics, JSON shape, and CSV escaping
+- Backtest report metrics, agent attribution, queue analytics, JSON shape, and CSV escaping
 - Bounded volatility excursion and long-run two-sided book maintenance
 - Trading strategies and legacy migration coverage
 - Concurrency (thread pool, async writers)

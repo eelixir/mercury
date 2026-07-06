@@ -45,6 +45,27 @@ TEST(BacktestReportTest, SummaryComputesRunMetricsFromEvents) {
     state.toxicityScore = 0.42;
     events.simStates.push_back(state);
 
+    AgentMetricsEvent metrics;
+    metrics.symbol = "SIM";
+    metrics.clientId = 1000;
+    metrics.agentName = "PassiveMarketMaker";
+    metrics.agentType = "market_maker";
+    metrics.wakeCount = 5;
+    metrics.submittedCount = 12;
+    metrics.limitOrderCount = 10;
+    metrics.cancelCount = 1;
+    metrics.modifyCount = 1;
+    metrics.fillCount = 2;
+    metrics.filledQuantity = 20;
+    metrics.liveOrderCount = 3;
+    metrics.restingQuantity = 90;
+    metrics.totalPnL = 7;
+    metrics.averageQueuePosition = 1.5;
+    metrics.averageQuantityAhead = 40.0;
+    metrics.averageFillProbability = 0.45;
+    metrics.averageTimeToFillMs = 120.0;
+    events.agentMetrics.push_back(metrics);
+
     const auto summary = buildBacktestSummary(
         "high-vol",
         config,
@@ -70,10 +91,15 @@ TEST(BacktestReportTest, SummaryComputesRunMetricsFromEvents) {
     EXPECT_EQ(summary.finalRegime, "stressed");
     EXPECT_DOUBLE_EQ(summary.finalToxicityScore, 0.42);
     EXPECT_EQ(summary.marketMakerCount, 3u);
+    EXPECT_EQ(summary.finalTotalPnL, 7);
+    ASSERT_EQ(summary.agents.size(), 1u);
+    EXPECT_EQ(summary.agents.front().agentType, "market_maker");
+    EXPECT_DOUBLE_EQ(summary.queueAnalytics.averageFillProbability, 0.45);
 
     const auto json = backtestSummaryToJson(summary);
     EXPECT_EQ(json.at("name"), "high-vol");
-    EXPECT_EQ(json.at("agents").at("noiseTraderCount").get<size_t>(), 6u);
+    EXPECT_EQ(json.at("agentCounts").at("noiseTraderCount").get<size_t>(), 6u);
+    EXPECT_EQ(json.at("agents").at(0).at("clientId").get<uint64_t>(), 1000u);
 }
 
 TEST(BacktestReportTest, CsvEscapeQuotesOnlyWhenNeeded) {

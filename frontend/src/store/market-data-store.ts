@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type {
+  AgentMetricsPayload,
   BookLevel,
   ConnectionState,
   MarketEnvelope,
@@ -25,6 +26,7 @@ export interface SymbolBucket {
   trades: TradePayload[]
   stats: StatsPayload | null
   simulation: SimulationStatePayload | null
+  agentMetricsByClient: Record<number, AgentMetricsPayload>
   chartPoints: ChartPoint[]
   pnlByClient: Record<number, PnLPayload>
   engineLatencyNs: number | null
@@ -38,6 +40,7 @@ export const EMPTY_BUCKET: SymbolBucket = {
   trades: [],
   stats: null,
   simulation: null,
+  agentMetricsByClient: {},
   chartPoints: [],
   pnlByClient: {},
   engineLatencyNs: null,
@@ -52,6 +55,7 @@ function newBucket(): SymbolBucket {
     trades: [],
     stats: null,
     simulation: null,
+    agentMetricsByClient: {},
     chartPoints: [],
     pnlByClient: {},
     engineLatencyNs: null,
@@ -302,6 +306,21 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
           bySymbol: updateBucket(ensured.bySymbol, symbol, {
             sequence: Math.max(bucket.sequence, envelope.sequence),
             simulation: envelope.payload,
+          }),
+          ...(activePatch ?? {}),
+        }
+      }
+
+      if (envelope.type === 'agent_metrics') {
+        return {
+          symbols: ensured.symbols,
+          streamSequence,
+          bySymbol: updateBucket(ensured.bySymbol, symbol, {
+            sequence: Math.max(bucket.sequence, envelope.sequence),
+            agentMetricsByClient: {
+              ...bucket.agentMetricsByClient,
+              [envelope.payload.clientId]: envelope.payload,
+            },
           }),
           ...(activePatch ?? {}),
         }

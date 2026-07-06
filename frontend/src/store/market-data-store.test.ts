@@ -242,6 +242,45 @@ describe('market data store', () => {
     expect(useMarketDataStore.getState().bySymbol['SIM'].simulation?.regime).toBe('stressed')
   })
 
+  it('applies agent metrics without changing other agent rows', () => {
+    const needsResync = useMarketDataStore.getState().applyEnvelope({
+      type: 'agent_metrics',
+      sequence: 4,
+      symbol: 'SIM',
+      payload: {
+        clientId: 1000,
+        agentName: 'PassiveMarketMaker',
+        agentType: 'market_maker',
+        timestamp: 10,
+        simulationTimestamp: 500,
+        wakeCount: 3,
+        intentCount: 8,
+        submittedCount: 8,
+        limitOrderCount: 6,
+        marketOrderCount: 0,
+        cancelCount: 1,
+        modifyCount: 1,
+        fillCount: 2,
+        filledQuantity: 20,
+        restingQuantity: 100,
+        liveOrderCount: 4,
+        netPosition: 10,
+        realizedPnL: 5,
+        unrealizedPnL: -1,
+        totalPnL: 4,
+        averageQueuePosition: 1.5,
+        averageQuantityAhead: 40,
+        averageFillProbability: 0.42,
+        averageTimeToFillMs: 120,
+      },
+    })
+
+    const metrics = useMarketDataStore.getState().bySymbol['SIM'].agentMetricsByClient[1000]
+    expect(needsResync).toBe(false)
+    expect(metrics.agentType).toBe('market_maker')
+    expect(metrics.averageFillProbability).toBe(0.42)
+  })
+
   it('keeps per-symbol buckets separate so swapping preserves state', () => {
     const store = useMarketDataStore.getState()
 

@@ -40,6 +40,7 @@ The frontend is not served from the C++ executable in v1.
 5. Headless accelerated simulation via `--sim --headless`
 6. Instant backtest mode via `--backtest`
 7. JSON-driven parameter sweeps via `--sweep`
+8. Scenario/config-driven lab runs via `--scenario`, `--mm-config`, and `--calibrate-replay`
 
 Simulation and server flags:
 
@@ -49,6 +50,9 @@ Simulation and server flags:
 - `--backtest`
 - `--backtest-output <dir>`
 - `--sweep <file>`
+- `--scenario <file>`
+- `--mm-config <file>`
+- `--calibrate-replay <file>`
 - `--host <host>`
 - `--port <port>`
 - `--symbol <name>`
@@ -154,10 +158,13 @@ Clock modes:
 
 Backtest reporting:
 
-- `--backtest-output <dir>` records `summary.json`, `config.json`, `trades.csv`, `stats.csv`, `pnl.csv`, and `sim_state.csv`
-- `include/BacktestReport.h` owns the derived run metrics and artifact writers
-- report metrics include effective speed, trade count, volume, final mid, realized volatility, average spread, max drawdown, final regime, and toxicity
+- `--backtest-output <dir>` records `summary.json`, `config.json`, `trades.csv`, `stats.csv`, `pnl.csv`, `sim_state.csv`, `agent_metrics.csv`, and `agent_summary.csv`
+- `include/BacktestReport.h` owns the derived run metrics, queue analytics, agent attribution, and artifact writers
+- report metrics include effective speed, trade count, volume, final mid, realized volatility, average spread, max drawdown, final regime, toxicity, total P&L, fill quality, queue position, quantity ahead, and adverse-selection estimates
 - `--sweep <file>` reads a JSON array or `{ "runs": [...] }`, applies per-run simulation overrides, forces instant clock mode, and writes per-run artifacts plus `sweep_summary.json` and `sweep_summary.csv` when an output directory is supplied
+- `--scenario <file>` applies the same JSON override shape to a single live, headless, or backtest run
+- `--mm-config <file>` applies market-maker quote levels, size, spread, wake interval, toxicity sensitivity, and inventory skew without recompilation
+- `--calibrate-replay <file>` runs an instant replay calibration and writes `calibration.json` comparing replay order mix and quantity profile with observed output
 
 Design constraints:
 
@@ -293,8 +300,11 @@ Internal DTOs:
 - `StatsEvent`
 - `PnLEvent`
 - `SimulationStateEvent`
+- `AgentMetricsEvent`
 
-`SimulationStateEvent` and `/api/state` also carry simulation microstructure state such as noise-trader count, regime intensities, and `toxicityScore`, so the dashboard and external clients can distinguish normal volatility from adverse-selection pressure.
+`SimulationStateEvent` and `/api/state` also carry simulation microstructure state such as noise-trader count, regime intensities, market-maker configuration, and `toxicityScore`, so the dashboard and external clients can distinguish normal volatility from adverse-selection pressure.
+
+`AgentMetricsEvent` carries live per-agent attribution: submitted intents, order-type mix, fills, resting quantity, P&L, queue position, quantity ahead, fill probability, and average time to fill.
 
 Every outbound event carries:
 
@@ -333,7 +343,7 @@ HTTP endpoints:
 
 WebSocket endpoints:
 
-- `/ws/market`: JSON text frames, snapshot on connect, then `book_delta`, `trade`, `execution`, `stats`, `pnl`, and `sim_state`
+- `/ws/market`: JSON text frames, snapshot on connect, then `book_delta`, `trade`, `execution`, `stats`, `pnl`, `sim_state`, and `agent_metrics`
 - `/ws/market/bin`: binary frames using packed structs from `BinaryProtocol.h`
 
 Current behavior:
@@ -383,16 +393,17 @@ Relevant frontend areas:
 State model:
 
 - one live store keyed by symbol
-- tracked fields include sequence, bids, asks, trades, stats, connection state, per-client PnL, engine latency, throughput, and simulation state including regime, noise-trader count, and arrival intensities
+- tracked fields include sequence, bids, asks, trades, stats, connection state, per-client PnL, per-agent metrics, engine latency, throughput, and simulation state including regime, noise-trader count, market-maker config, and arrival intensities
 - submitted order IDs are tracked in a `Set<number>` for self-trade detection in the trade tape
 
 UI layout:
 
 - Top Bar: system status, spread, mid, top-of-book, connection state, clock
 - Stats Strip: bid, ask, mid, spread, spread bps, trades, volume, orders, bid/ask levels
-- Left column: order entry form, PnL card, simulation controls with volatility/regime controls, system health card
+- Left column: order entry form, PnL card, simulation controls with volatility/regime/scenario/agent-count/market-maker controls, system health card
 - Center column: mid-price chart above, L2 order book ladder below
 - Right column: scrolling trade tape with uptick/downtick and self-trade highlighting
+- Lab view: file-imported backtest artifacts with P&L, inventory, mid/spread, toxicity, queue metrics, and agent attribution
 - Status Bar: WS state, active client, trade count, volume, bid/ask levels, timezone, version
 
 Client behavior:
@@ -403,6 +414,7 @@ Client behavior:
 - sequence gaps trigger resync logic instead of blindly applying out-of-order frames
 - `execution` envelopes are accepted as sequencing events without changing book state
 - `sim_state` updates drive the operator controls, regime/noise telemetry, and runtime status badges
+- `agent_metrics` updates drive the live attribution table
 - order entry uses `POST /api/orders` with an editable `clientId`
 - submitted order IDs are tracked so the trade tape can highlight the user's own fills
 - `engineLatencyNs` from `book_delta` and `trade` payloads feeds the System Health card
@@ -453,8 +465,8 @@ For market-runtime or dashboard changes, treat both backend and frontend tests a
 
 `tests/backtest_report_test.cpp` covers:
 
-- derived backtest metrics such as effective speed, min/max mid, max drawdown, final regime, and final toxicity
-- JSON summary shape for agent counts
+- derived backtest metrics such as effective speed, min/max mid, max drawdown, final regime, final toxicity, queue analytics, and final P&L
+- JSON summary shape for agent counts and per-agent attribution
 - CSV escaping used by report artifact writers
 
 `tests/regime_manager_test.cpp` covers:
@@ -470,5 +482,6 @@ For market-runtime or dashboard changes, treat both backend and frontend tests a
 
 - `/api/state` simulation JSON fields for regime, noise traders, and arrival intensities
 - `/api/orders` request parsing and execution-response shape
-- JSON WebSocket snapshot and `sim_state` envelope shape
+- JSON WebSocket snapshot, `sim_state`, and `agent_metrics` envelope shape
 - simulation control state after forcing a market regime
+- simulation control state after changing agent counts and market-maker config

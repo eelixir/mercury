@@ -49,6 +49,7 @@ namespace Mercury {
         void onPnLEvent(const PnLEvent& pnl) override;
         void onExecutionEvent(const ExecutionEvent& execution) override;
         void onSimulationState(const SimulationStateEvent& state) override;
+        void onAgentMetrics(const AgentMetricsEvent& metrics) override;
 
     private:
         void broadcast(std::string message);

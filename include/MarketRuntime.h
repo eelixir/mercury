@@ -55,6 +55,16 @@ namespace Mercury {
         return SimulationVolatilityPreset::Normal;
     }
 
+    struct MarketMakerConfig {
+        size_t levels = 0;
+        uint64_t quoteQuantity = 0;
+        uint64_t minQuantity = 0;
+        int64_t baseSpreadTicks = 0;
+        double toxicitySensitivity = 1.0;
+        uint64_t wakeIntervalMs = 0;
+        int64_t inventorySkewDivisor = 50;
+    };
+
     struct SimulationConfig {
         bool enabled = false;
         bool headless = false;
@@ -69,6 +79,7 @@ namespace Mercury {
         uint64_t stepMs = 50;
         uint64_t publishIntervalMs = 250;
         uint64_t headlessDurationMs = 30000;
+        MarketMakerConfig marketMaker;
     };
 
     struct SimulationEnvironmentView {
@@ -140,6 +151,14 @@ namespace Mercury {
     struct SimulationControl {
         std::string action;
         std::string volatility;
+        std::string scenario;
+        size_t marketMakerCount = 0;
+        size_t momentumCount = 0;
+        size_t meanReversionCount = 0;
+        size_t noiseTraderCount = 0;
+        bool hasAgentCounts = false;
+        MarketMakerConfig marketMaker;
+        bool hasMarketMakerConfig = false;
     };
 
     struct MarketRuntimeState {
@@ -173,6 +192,8 @@ namespace Mercury {
         double limitLambda = 0.0;
         double cancelLambda = 0.0;
         double marketableLambda = 0.0;
+        MarketMakerConfig marketMaker;
+        std::vector<AgentMetricsEvent> agentMetrics;
     };
 
     struct HeadlessSummary {
@@ -256,6 +277,32 @@ namespace Mercury {
             Side side = Side::Buy;
             int64_t price = 0;
             uint64_t quantity = 0;
+            uint64_t placedAtMs = 0;
+        };
+
+        struct AgentRuntimeStats {
+            std::string name;
+            std::string type;
+            uint64_t wakeCount = 0;
+            uint64_t intentCount = 0;
+            uint64_t submittedCount = 0;
+            uint64_t limitOrderCount = 0;
+            uint64_t marketOrderCount = 0;
+            uint64_t cancelCount = 0;
+            uint64_t modifyCount = 0;
+            uint64_t fillCount = 0;
+            uint64_t filledQuantity = 0;
+            uint64_t fillAgeSamples = 0;
+            double fillAgeMsTotal = 0.0;
+            uint64_t restingQuantity = 0;
+            size_t liveOrderCount = 0;
+            int64_t netPosition = 0;
+            int64_t realizedPnL = 0;
+            int64_t unrealizedPnL = 0;
+            int64_t totalPnL = 0;
+            double averageQueuePosition = 0.0;
+            double averageQuantityAhead = 0.0;
+            double averageFillProbability = 0.0;
         };
 
         // Per-symbol simulation environment state.
@@ -272,6 +319,7 @@ namespace Mercury {
             std::vector<TradeEvent> recentTrades;
             std::unordered_map<uint64_t, LiveOrderRecord> liveOrdersById;
             std::unordered_map<uint64_t, PnLEvent> pnlByClient;
+            std::unordered_map<uint64_t, AgentRuntimeStats> agentStatsByClient;
             uint64_t lastSimStatePublishMs = 0;
             RegimeManager regime{SimulationVolatilityPreset::Normal};
         };
@@ -306,10 +354,22 @@ namespace Mercury {
         void advanceEnvironment(const std::string& symbol, uint64_t stepMs);
         void maybeWakeAgents();
         void publishSimulationState(bool force = false);
+        void publishAgentMetrics(const std::string& symbol,
+                                 uint64_t clientId,
+                                 const AgentRuntimeStats& stats);
         void fanout(const std::function<void(MarketDataSink*)>& fn);
         SimulationObservation buildObservation(const std::string& symbol, uint64_t clientId);
         Order translateIntent(const OrderIntent& intent, uint64_t clientId);
         void applyExecutionToLiveOrders(const std::string& symbol, const Order& order, const ExecutionResult& result);
+        AgentRuntimeStats& ensureAgentStats(const std::string& symbol,
+                                            uint64_t clientId,
+                                            const std::string& name);
+        void recordAgentWake(const std::string& symbol,
+                             uint64_t clientId,
+                             const std::string& name,
+                             const SimulationObservation& observation,
+                             const std::vector<OrderIntent>& intents,
+                             uint64_t submittedCount);
         void updateMetricsFromStats(const std::string& symbol, const StatsEvent& stats);
         void restartRuntime();
 

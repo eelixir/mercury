@@ -3,6 +3,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -12,6 +13,7 @@
 #include <vector>
 #include <nlohmann/json.hpp>
 #include "BacktestReport.h"
+#include "CSVParser.h"
 #include "MarketRuntime.h"
 #include "ServerApp.h"
 
@@ -41,6 +43,11 @@ public:
     void onSimulationState(const Mercury::SimulationStateEvent& state) override {
         std::lock_guard<std::mutex> lock(mutex_);
         events_.simStates.push_back(state);
+    }
+
+    void onAgentMetrics(const Mercury::AgentMetricsEvent& metrics) override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        events_.agentMetrics.push_back(metrics);
     }
 
     Mercury::BacktestEventLog snapshot() const {
@@ -92,6 +99,125 @@ std::vector<std::string> parseSymbolList(std::string symbols) {
     return parsed.empty() ? std::vector<std::string>{"SIM"} : parsed;
 }
 
+nlohmann::json buildReplayCalibrationReport(const std::string& replayFile,
+                                            const Mercury::BacktestEventLog& events) {
+    Mercury::CSVParser parser;
+    const auto orders = parser.parseFile(replayFile);
+
+    uint64_t replayLimit = 0;
+    uint64_t replayMarket = 0;
+    uint64_t replayCancel = 0;
+    uint64_t replayModify = 0;
+    uint64_t replayBuy = 0;
+    uint64_t replaySell = 0;
+    uint64_t replayQuantity = 0;
+    for (const auto& order : orders) {
+        replayQuantity += order.quantity;
+        if (order.side == Mercury::Side::Buy) {
+            ++replayBuy;
+        } else {
+            ++replaySell;
+        }
+        switch (order.orderType) {
+            case Mercury::OrderType::Limit: ++replayLimit; break;
+            case Mercury::OrderType::Market: ++replayMarket; break;
+            case Mercury::OrderType::Cancel: ++replayCancel; break;
+            case Mercury::OrderType::Modify: ++replayModify; break;
+        }
+    }
+
+    uint64_t observedVolume = 0;
+    for (const auto& trade : events.trades) {
+        observedVolume += trade.quantity;
+    }
+
+    double spreadTotal = 0.0;
+    double midTotal = 0.0;
+    uint64_t spreadSamples = 0;
+    uint64_t midSamples = 0;
+    uint64_t depthSamples = 0;
+    uint64_t orderCountTotal = 0;
+    for (const auto& stats : events.stats) {
+        if (stats.spread > 0) {
+            spreadTotal += static_cast<double>(stats.spread);
+            ++spreadSamples;
+        }
+        if (stats.midPrice > 0) {
+            midTotal += static_cast<double>(stats.midPrice);
+            ++midSamples;
+        }
+        orderCountTotal += stats.orderCount;
+        ++depthSamples;
+    }
+
+    uint64_t latestSubmitted = 0;
+    uint64_t latestCancels = 0;
+    uint64_t latestFilledQuantity = 0;
+    std::map<std::pair<std::string, uint64_t>, Mercury::AgentMetricsEvent> latestAgentMetrics;
+    for (const auto& metrics : events.agentMetrics) {
+        latestAgentMetrics[{metrics.symbol, metrics.clientId}] = metrics;
+    }
+    for (const auto& [key, metrics] : latestAgentMetrics) {
+        latestSubmitted += metrics.submittedCount;
+        latestCancels += metrics.cancelCount;
+        latestFilledQuantity += metrics.filledQuantity;
+    }
+
+    const double replayAvgQty = orders.empty()
+        ? 0.0
+        : static_cast<double>(replayQuantity) / static_cast<double>(orders.size());
+    const double observedAvgTradeSize = events.trades.empty()
+        ? 0.0
+        : static_cast<double>(observedVolume) / static_cast<double>(events.trades.size());
+    const double avgSpread = spreadSamples == 0
+        ? 0.0
+        : spreadTotal / static_cast<double>(spreadSamples);
+    const double avgMid = midSamples == 0
+        ? 0.0
+        : midTotal / static_cast<double>(midSamples);
+    const double avgOrderCount = depthSamples == 0
+        ? 0.0
+        : static_cast<double>(orderCountTotal) / static_cast<double>(depthSamples);
+
+    return nlohmann::json{
+        {"replayFile", replayFile},
+        {"target", {
+            {"orderCount", orders.size()},
+            {"parseErrors", parser.getParseErrorCount()},
+            {"limitOrders", replayLimit},
+            {"marketOrders", replayMarket},
+            {"cancelOrders", replayCancel},
+            {"modifyOrders", replayModify},
+            {"buyOrders", replayBuy},
+            {"sellOrders", replaySell},
+            {"totalQuantity", replayQuantity},
+            {"averageOrderQuantity", replayAvgQty}
+        }},
+        {"observed", {
+            {"tradeCount", events.trades.size()},
+            {"totalVolume", observedVolume},
+            {"averageTradeSize", observedAvgTradeSize},
+            {"averageSpread", avgSpread},
+            {"averageMidPrice", avgMid},
+            {"averageOrderCount", avgOrderCount},
+            {"agentSubmittedCount", latestSubmitted},
+            {"agentCancelCount", latestCancels},
+            {"agentFilledQuantity", latestFilledQuantity}
+        }},
+        {"comparison", {
+            {"volumeToReplayQuantity", replayQuantity > 0
+                ? static_cast<double>(observedVolume) / static_cast<double>(replayQuantity)
+                : 0.0},
+            {"tradeCountToReplayOrders", !orders.empty()
+                ? static_cast<double>(events.trades.size()) / static_cast<double>(orders.size())
+                : 0.0},
+            {"agentCancelToSubmitRatio", latestSubmitted > 0
+                ? static_cast<double>(latestCancels) / static_cast<double>(latestSubmitted)
+                : 0.0}
+        }}
+    };
+}
+
 void writeBacktestArtifacts(const fs::path& outputDir,
                             const Mercury::ServerOptions& options,
                             const Mercury::BacktestSummary& summary,
@@ -107,6 +233,9 @@ void writeBacktestArtifacts(const fs::path& outputDir,
         {"replaySpeed", options.replaySpeed},
         {"replayLoop", options.replayLoop},
         {"replayLoopPauseMs", options.replayLoopPauseMs},
+        {"scenarioFile", options.scenarioFile ? nlohmann::json(*options.scenarioFile) : nlohmann::json(nullptr)},
+        {"marketMakerConfigFile", options.marketMakerConfigFile ? nlohmann::json(*options.marketMakerConfigFile) : nlohmann::json(nullptr)},
+        {"calibrationReplayFile", options.calibrationReplayFile ? nlohmann::json(*options.calibrationReplayFile) : nlohmann::json(nullptr)},
         {"simulation", {
             {"clockMode", Mercury::simulationClockModeToString(options.simulation.clockMode)},
             {"seed", options.simulation.seed},
@@ -118,7 +247,16 @@ void writeBacktestArtifacts(const fs::path& outputDir,
             {"meanReversionCount", options.simulation.meanReversionCount},
             {"noiseTraderCount", options.simulation.noiseTraderCount},
             {"stepMs", options.simulation.stepMs},
-            {"publishIntervalMs", options.simulation.publishIntervalMs}
+            {"publishIntervalMs", options.simulation.publishIntervalMs},
+            {"marketMaker", {
+                {"levels", options.simulation.marketMaker.levels},
+                {"quoteQuantity", options.simulation.marketMaker.quoteQuantity},
+                {"minQuantity", options.simulation.marketMaker.minQuantity},
+                {"baseSpreadTicks", options.simulation.marketMaker.baseSpreadTicks},
+                {"toxicitySensitivity", options.simulation.marketMaker.toxicitySensitivity},
+                {"wakeIntervalMs", options.simulation.marketMaker.wakeIntervalMs},
+                {"inventorySkewDivisor", options.simulation.marketMaker.inventorySkewDivisor}
+            }}
         }}
     };
     Mercury::writeTextFile(pathString(outputDir / "config.json"), configJson.dump(2));
@@ -126,6 +264,12 @@ void writeBacktestArtifacts(const fs::path& outputDir,
     Mercury::writeStatsCsv(pathString(outputDir / "stats.csv"), events.stats);
     Mercury::writePnlCsv(pathString(outputDir / "pnl.csv"), events.pnl);
     Mercury::writeSimStateCsv(pathString(outputDir / "sim_state.csv"), events.simStates);
+    Mercury::writeAgentMetricsCsv(pathString(outputDir / "agent_metrics.csv"), events.agentMetrics);
+    Mercury::writeAgentSummaryCsv(pathString(outputDir / "agent_summary.csv"), summary.agents);
+    if (options.calibrationReplayFile) {
+        Mercury::writeTextFile(pathString(outputDir / "calibration.json"),
+                               buildReplayCalibrationReport(*options.calibrationReplayFile, events).dump(2));
+    }
 }
 
 nlohmann::json readJsonFile(const fs::path& path) {
@@ -145,7 +289,20 @@ void applyNumericOverride(const nlohmann::json& object, const char* key, T& targ
     }
 }
 
-void applySweepRunOverrides(Mercury::ServerOptions& options, const nlohmann::json& run) {
+void applyMarketMakerOverrides(Mercury::MarketMakerConfig& config, const nlohmann::json& object) {
+    applyNumericOverride(object, "levels", config.levels);
+    applyNumericOverride(object, "quoteQuantity", config.quoteQuantity);
+    applyNumericOverride(object, "quoteSize", config.quoteQuantity);
+    applyNumericOverride(object, "minQuantity", config.minQuantity);
+    applyNumericOverride(object, "minSize", config.minQuantity);
+    applyNumericOverride(object, "baseSpreadTicks", config.baseSpreadTicks);
+    applyNumericOverride(object, "spreadTicks", config.baseSpreadTicks);
+    applyNumericOverride(object, "toxicitySensitivity", config.toxicitySensitivity);
+    applyNumericOverride(object, "wakeIntervalMs", config.wakeIntervalMs);
+    applyNumericOverride(object, "inventorySkewDivisor", config.inventorySkewDivisor);
+}
+
+void applyRunOverrides(Mercury::ServerOptions& options, const nlohmann::json& run, bool forceInstant) {
     auto& config = options.simulation;
     const bool replaySpeedProvided = run.contains("replaySpeed");
 
@@ -168,6 +325,9 @@ void applySweepRunOverrides(Mercury::ServerOptions& options, const nlohmann::jso
 
     if (run.contains("volatility")) {
         config.volatility = Mercury::simulationVolatilityFromString(run.at("volatility").get<std::string>());
+    }
+    if (run.contains("marketMaker") && run.at("marketMaker").is_object()) {
+        applyMarketMakerOverrides(config.marketMaker, run.at("marketMaker"));
     }
     if (run.contains("symbols")) {
         if (run.at("symbols").is_array()) {
@@ -194,9 +354,25 @@ void applySweepRunOverrides(Mercury::ServerOptions& options, const nlohmann::jso
         options.replaySpeed = 1.0e12;
     }
 
-    config.enabled = true;
-    config.headless = true;
-    config.clockMode = Mercury::SimulationClockMode::Instant;
+    if (forceInstant) {
+        config.enabled = true;
+        config.headless = true;
+        config.clockMode = Mercury::SimulationClockMode::Instant;
+    }
+}
+
+void applyScenarioDocument(Mercury::ServerOptions& options, const nlohmann::json& document, bool forceInstant) {
+    if (!document.is_object()) {
+        throw std::runtime_error("Scenario file must contain a JSON object");
+    }
+
+    nlohmann::json merged = document;
+    if (document.contains("simulation") && document.at("simulation").is_object()) {
+        for (const auto& [key, value] : document.at("simulation").items()) {
+            merged[key] = value;
+        }
+    }
+    applyRunOverrides(options, merged, forceInstant);
 }
 
 void writeSweepSummary(const fs::path& outputDir,
@@ -207,7 +383,8 @@ void writeSweepSummary(const fs::path& outputDir,
     std::ostringstream csv;
     csv << "name,seed,volatility,marketMakerCount,momentumCount,meanReversionCount,noiseTraderCount,"
         << "simulationTimestampMs,wallTimeMs,effectiveSpeed,tradeCount,totalVolume,orderCount,lastMidPrice,"
-        << "realizedVolatilityBps,averageSpread,maxDrawdownTicks,maxDrawdownBps,finalRegime,finalToxicityScore\n";
+        << "realizedVolatilityBps,averageSpread,maxDrawdownTicks,maxDrawdownBps,finalRegime,finalToxicityScore,"
+        << "finalTotalPnL,averageQueuePosition,averageFillProbability,averageTimeToFillMs\n";
 
     for (const auto& summary : summaries) {
         json.push_back(Mercury::backtestSummaryToJson(summary));
@@ -230,7 +407,11 @@ void writeSweepSummary(const fs::path& outputDir,
             << summary.maxDrawdownTicks << ','
             << summary.maxDrawdownBps << ','
             << Mercury::csvEscape(summary.finalRegime) << ','
-            << summary.finalToxicityScore << '\n';
+            << summary.finalToxicityScore << ','
+            << summary.finalTotalPnL << ','
+            << summary.queueAnalytics.averageQueuePosition << ','
+            << summary.queueAnalytics.averageFillProbability << ','
+            << summary.queueAnalytics.averageTimeToFillMs << '\n';
     }
 
     Mercury::writeTextFile(pathString(outputDir / "sweep_summary.json"), json.dump(2));
@@ -256,6 +437,10 @@ void printUsage() {
     std::cout << "Backtest lab options:\n";
     std::cout << "  --backtest-output <dir>  Write summary/config/trade/stat/PnL artifacts\n";
     std::cout << "  --sweep <file>     Run multiple instant backtests from a JSON sweep file\n\n";
+    std::cout << "Scenario and calibration options:\n";
+    std::cout << "  --scenario <file>  Apply a scenario JSON file\n";
+    std::cout << "  --mm-config <file> Apply a market-maker config JSON file\n";
+    std::cout << "  --calibrate-replay <file>  Run instant replay calibration and write calibration.json\n\n";
     std::cout << "Replay options:\n";
     std::cout << "  --replay <file>    Feed a replay CSV into server/headless/backtest mode\n";
     std::cout << "  --replay-speed <x> Replay speed multiplier\n";
@@ -341,6 +526,10 @@ BacktestRunResult runBacktestOnce(Mercury::ServerOptions options,
         std::cout << "Max Drawdown:  " << resultSummary.maxDrawdownTicks << " ticks ("
                   << std::fixed << std::setprecision(2) << resultSummary.maxDrawdownBps << " bps)\n";
         std::cout << "Final Regime:  " << resultSummary.finalRegime << "\n";
+        std::cout << "Final PnL:     " << resultSummary.finalTotalPnL << "\n";
+        std::cout << "Agents:        " << resultSummary.agents.size() << "\n";
+        std::cout << "Avg Queue Pos: " << std::fixed << std::setprecision(2)
+                  << resultSummary.queueAnalytics.averageQueuePosition << "\n";
         std::cout << "Realized Vol:  " << std::fixed << std::setprecision(2)
                   << resultSummary.realizedVolatilityBps << " bps\n";
         std::cout << "Avg Spread:    " << std::fixed << std::setprecision(2)
@@ -411,7 +600,7 @@ int runBacktestSweep(Mercury::ServerOptions baseOptions) {
 
             Mercury::ServerOptions options = baseOptions;
             options.sweepFile = std::nullopt;
-            applySweepRunOverrides(options, run);
+            applyRunOverrides(options, run, true);
 
             const std::string runName = run.value("name", "run_" + std::to_string(i + 1));
             const auto outputDir =
@@ -501,6 +690,37 @@ int main(int argc, char* argv[]) {
             serverOptions.backtestOutputDir = argv[++i];
         } else if (arg == "--sweep" && i + 1 < argc) {
             serverOptions.sweepFile = argv[++i];
+            instantBacktest = true;
+            headlessSimulation = true;
+            serverOptions.simulation.enabled = true;
+            serverOptions.simulation.headless = true;
+        } else if (arg == "--scenario" && i + 1 < argc) {
+            serverOptions.scenarioFile = argv[++i];
+            try {
+                applyScenarioDocument(
+                    serverOptions,
+                    readJsonFile(*serverOptions.scenarioFile),
+                    instantBacktest || serverOptions.sweepFile.has_value());
+            } catch (const std::exception& ex) {
+                std::cerr << ex.what() << "\n";
+                return 1;
+            }
+        } else if (arg == "--mm-config" && i + 1 < argc) {
+            serverOptions.marketMakerConfigFile = argv[++i];
+            try {
+                const auto mmConfig = readJsonFile(*serverOptions.marketMakerConfigFile);
+                if (mmConfig.contains("marketMaker") && mmConfig.at("marketMaker").is_object()) {
+                    applyMarketMakerOverrides(serverOptions.simulation.marketMaker, mmConfig.at("marketMaker"));
+                } else {
+                    applyMarketMakerOverrides(serverOptions.simulation.marketMaker, mmConfig);
+                }
+            } catch (const std::exception& ex) {
+                std::cerr << ex.what() << "\n";
+                return 1;
+            }
+        } else if (arg == "--calibrate-replay" && i + 1 < argc) {
+            serverOptions.calibrationReplayFile = argv[++i];
+            serverOptions.replayFile = *serverOptions.calibrationReplayFile;
             instantBacktest = true;
             headlessSimulation = true;
             serverOptions.simulation.enabled = true;

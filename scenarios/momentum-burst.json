@@ -1,0 +1,25 @@
+{
+  "name": "momentum-burst",
+  "description": "Momentum-heavy flow for testing market-maker inventory response during short bursts.",
+  "symbols": ["SIM"],
+  "simulation": {
+    "seed": 210,
+    "volatility": "high",
+    "durationMs": 30000,
+    "marketMakerCount": 2,
+    "momentumCount": 5,
+    "meanReversionCount": 1,
+    "noiseTraderCount": 2,
+    "stepMs": 50,
+    "publishIntervalMs": 250
+  },
+  "marketMaker": {
+    "levels": 4,
+    "quoteQuantity": 85,
+    "minQuantity": 15,
+    "baseSpreadTicks": 4,
+    "toxicitySensitivity": 1.3,
+    "wakeIntervalMs": 65,
+    "inventorySkewDivisor": 45
+  }
+}

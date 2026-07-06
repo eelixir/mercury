@@ -1,0 +1,25 @@
+{
+  "name": "toxic-flow",
+  "description": "High marketable flow and momentum pressure to test adverse selection and spread widening.",
+  "symbols": ["SIM"],
+  "simulation": {
+    "seed": 84,
+    "volatility": "high",
+    "durationMs": 30000,
+    "marketMakerCount": 2,
+    "momentumCount": 4,
+    "meanReversionCount": 1,
+    "noiseTraderCount": 4,
+    "stepMs": 50,
+    "publishIntervalMs": 250
+  },
+  "marketMaker": {
+    "levels": 4,
+    "quoteQuantity": 80,
+    "minQuantity": 15,
+    "baseSpreadTicks": 5,
+    "toxicitySensitivity": 1.8,
+    "wakeIntervalMs": 70,
+    "inventorySkewDivisor": 45
+  }
+}
