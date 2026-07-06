@@ -15,6 +15,8 @@ namespace Mercury {
         double replaySpeed = 1.0;
         bool replayLoop = false;
         uint64_t replayLoopPauseMs = 1000;
+        std::optional<std::string> backtestOutputDir;
+        std::optional<std::string> sweepFile;
         std::vector<std::string> symbols = {"SIM"};
         SimulationConfig simulation;
     };

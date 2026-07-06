@@ -29,9 +29,9 @@ Minimum validation:
 - `ctest --test-dir build --output-on-failure`
 - or targeted `mercury_tests --gtest_filter=MatchingEngineTest.*` if you are working directly with the test binary
 
-## 2. Changing Market Runtime, Server, Or Replay
+## 2. Changing Market Runtime, Server, Replay, Or Backtests
 
-Use this path for `MarketRuntime`, `EngineService`, `ServerApp`, snapshots, deltas, sequence handling, simulation controls, or replay flow.
+Use this path for `MarketRuntime`, `EngineService`, `ServerApp`, snapshots, deltas, sequence handling, simulation controls, replay flow, instant backtests, or sweep/report output.
 
 Read first:
 
@@ -43,6 +43,7 @@ Read first:
 - `include/MarketDataPublisher.h`
 - `include/BinaryProtocol.h`
 - `include/ServerHelpers.h`
+- `include/BacktestReport.h`
 - `src/MarketRuntime.cpp`
 - `src/EngineService.cpp`
 - `src/ServerApp.cpp`
@@ -61,6 +62,9 @@ Required checks:
 - snapshot depth remains clamped to `1..100`
 - replay and HTTP orders still feed the same runtime path
 - simulation controls and runtime-state reporting stay aligned with backend behavior
+- instant backtests stay CPU-paced and do not block on real-time sleeps
+- `--backtest-output` artifacts stay parseable and aligned with emitted DTO fields
+- `--sweep` applies the same simulation knobs as the single-run CLI path
 - frontend store still understands the emitted envelope shape
 - telemetry fields (`engineLatencyNs`, `messagesPerSecond`) are populated correctly
 - queue-position fields stay sourced from the actual intrusive FIFO `PriceLevel` order, not from copied snapshots
@@ -87,7 +91,7 @@ Recommended manual smoke test:
 7. Confirm self-trade highlighting appears in the trade tape.
 8. Refresh the browser and confirm the UI resyncs from a fresh snapshot.
 9. Optionally connect a raw WebSocket client to `/ws/market/bin` and verify binary frames arrive.
-10. Optionally run `.\build\mercury.exe --sim --headless --sim-seed 42 --sim-speed 25 --sim-duration-ms 30000` twice and compare summary output.
+10. Optionally run `.\build\mercury.exe --backtest --sim-seed 42 --sim-duration-ms 30000 --backtest-output .codex-run\baseline` twice and compare summary output.
 11. When changing simulation dynamics, sample `GET /api/state` over a few intervals at `normal` and `high` volatility and confirm spreads and activity increase without 100% to 1000% price jumps over a few seconds.
 
 ## 3. Changing Frontend Dashboard Behavior
@@ -184,16 +188,49 @@ ctest --test-dir build --output-on-failure
 .\build\mercury.exe --server --sim --host 127.0.0.1 --port 9001 --symbol SIM,AAPL,GOOG --replay data\sample_orders_with_clients.csv --replay-speed 10
 ```
 
+Loop the replay continuously:
+
+```powershell
+.\build\mercury.exe --server --sim --host 127.0.0.1 --port 9001 --symbol SIM,AAPL,GOOG --replay data\sample_orders_with_clients.csv --replay-speed 10 --replay-loop --replay-loop-pause 1000
+```
+
 ### Run Headless Simulation
 
 ```powershell
 .\build\mercury.exe --sim --headless --sim-speed 25 --sim-seed 42 --sim-duration-ms 30000 --sim-volatility normal
 ```
 
+### Run Instant Backtest
+
+```powershell
+.\build\mercury.exe --backtest --sim-seed 42 --sim-duration-ms 30000 --sim-volatility normal --backtest-output runs\baseline
+```
+
 Add Poisson-flow noise traders to stress arrival intensity:
 
 ```powershell
-.\build\mercury.exe --sim --headless --sim-volatility high --noise-count 3 --sim-duration-ms 30000
+.\build\mercury.exe --backtest --sim-volatility high --noise-count 3 --sim-duration-ms 30000 --backtest-output runs\high-noise
+```
+
+The output directory contains `summary.json`, `config.json`, `trades.csv`, `stats.csv`, `pnl.csv`, and `sim_state.csv`.
+
+### Run Backtest Sweep
+
+Create a JSON sweep file:
+
+```json
+{
+  "runs": [
+    { "name": "baseline", "seed": 42, "volatility": "normal", "marketMakerCount": 2, "noiseTraderCount": 1 },
+    { "name": "wide-mm", "seed": 42, "volatility": "high", "marketMakerCount": 4, "noiseTraderCount": 3 }
+  ]
+}
+```
+
+Run all scenarios:
+
+```powershell
+.\build\mercury.exe --sweep runs\sweep.json --sim-duration-ms 30000 --backtest-output runs\sweep
 ```
 
 ### Run Frontend
@@ -261,6 +298,7 @@ Invoke-RestMethod `
 Before finishing a change, confirm:
 
 - the modified behavior is covered by a backend or frontend test
+- HTTP or WebSocket contract changes are covered by `tests/server_api_contract_test.cpp` or an equivalent integration test
 - sequence handling still makes sense for reconnect and resync paths
 - manual orders, replay, and simulated agents still converge on the same runtime path
 - HTTP and WebSocket contracts are still documented correctly

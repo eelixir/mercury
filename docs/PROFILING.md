@@ -115,10 +115,10 @@ BM_RealisticMix                                       0.29 ms         0.27 ms   
 
 Mercury uses custom data structures optimized for trading workloads:
 
-### HashMap (Robin Hood Hashing)
+### HashMap (Abseil flat_hash_map wrapper)
 - **Location:** `include/HashMap.h`
 - **Use:** O(1) order ID lookups
-- **Benefits:** Open addressing, power-of-2 sizing, cache-friendly probing
+- **Benefits:** Mature open-addressed hash table behavior, cache-friendly storage, stable repository wrapper API
 
 ### IntrusiveList
 - **Location:** `include/IntrusiveList.h`  
@@ -197,11 +197,11 @@ For detailed strategy documentation, see [STRATEGIES.md](STRATEGIES.md).
 ## Running the Simulation
 
 ```bash
-# Run the accelerated headless simulation
-./build/mercury --headless --sim-duration-ms 30000
+# Run an instant headless backtest
+./build/mercury --backtest --sim-duration-ms 30000 --backtest-output runs/baseline
 
 # Tune the agent mix
-./build/mercury --headless --mm-count 3 --mom-count 2 --mr-count 2 --noise-count 4
+./build/mercury --backtest --mm-count 3 --mom-count 2 --mr-count 2 --noise-count 4 --backtest-output runs/agent-mix
 
 # Live server mode (HTTP/WebSocket on 127.0.0.1:9001)
 ./build/mercury --server
@@ -259,7 +259,7 @@ For more advanced profiling, use WSL2:
 
 ```bash
 # Record CPU samples
-perf record -g ./mercury data/sample_orders.csv
+perf record -g ./mercury data/sample_orders_with_clients.csv
 
 # View report
 perf report
@@ -272,10 +272,10 @@ perf script | stackcollapse-perf.pl | flamegraph.pl > flame.svg
 
 ```bash
 # Memory leak check
-valgrind --leak-check=full ./mercury data/sample_orders.csv
+valgrind --leak-check=full ./mercury data/sample_orders_with_clients.csv
 
 # Cache profiling
-valgrind --tool=cachegrind ./mercury data/sample_orders.csv
+valgrind --tool=cachegrind ./mercury data/sample_orders_with_clients.csv
 ```
 
 ---

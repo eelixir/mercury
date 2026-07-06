@@ -28,6 +28,7 @@ Vite proxies `/api` and `/ws` to `127.0.0.1:9001` (configured in `vite.config.ts
 | Top | `StatsStrip` | Bid, ask, mid, spread, bps, trades, volume, orders, levels |
 | Left | `OrderEntryForm` | Limit/market/cancel/modify with buy/sell, price, qty, clientId |
 | Left | `PnLCard` | Net position, total/realized/unrealized PnL (green/red) |
+| Left | `SimulationControls` | Pause/resume, restart, volatility, regime, noise count, arrival rates |
 | Left | `SystemHealth` | Engine latency (µs), throughput (msg/s), connection dot |
 | Center | `MidPriceChart` | Lightweight-charts line chart with delta % tracking |
 | Center | `OrderBookLadder` | L2 depth — asks (red) above, spread marker, bids (green) below |
@@ -43,6 +44,7 @@ The Zustand store (`src/store/market-data-store.ts`) handles:
 - **Trades**: newest-first ring buffer (120 entries)
 - **Stats**: trade count, volume, spread, mid-price, MPS
 - **PnL**: per-client position and P&L tracking
+- **Simulation**: runtime status, volatility, regime, noise-trader count, toxicity, and arrival rates
 - **Telemetry**: `engineLatencyNs` from deltas/trades, `messagesPerSecond` from stats
 - **Self-trade detection**: submitted order IDs tracked in a `Set<number>`
 - **Sequence gap detection**: triggers resync via WebSocket subscribe message

@@ -1428,6 +1428,13 @@ namespace Mercury {
             uint64_t realSleepMs = stepMs;
             if (simulationConfig_.clockMode == SimulationClockMode::Accelerated) {
                 realSleepMs = static_cast<uint64_t>(std::max(1.0, std::round(static_cast<double>(stepMs) / speed)));
+            } else if (simulationConfig_.clockMode == SimulationClockMode::Instant) {
+                realSleepMs = 0;
+            }
+
+            if (realSleepMs == 0) {
+                std::this_thread::yield();
+                continue;
             }
 
             std::this_thread::sleep_for(std::chrono::milliseconds(realSleepMs));

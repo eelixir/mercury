@@ -4,13 +4,17 @@
 #include "MarketRuntime.h"
 #include "Order.h"
 
-#include <App.h>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cctype>
 #include <string>
 #include <string_view>
+
+namespace uWS {
+    template <bool SSL>
+    struct HttpResponse;
+}
 
 namespace Mercury {
 
@@ -196,9 +200,14 @@ namespace Mercury {
                     {"marketMakerCount", state.marketMakerCount},
                     {"momentumCount", state.momentumCount},
                     {"meanReversionCount", state.meanReversionCount},
+                    {"noiseTraderCount", state.noiseTraderCount},
                     {"realizedVolatilityBps", state.realizedVolatilityBps},
                     {"averageSpread", state.averageSpread},
-                    {"toxicityScore", state.toxicityScore}
+                    {"toxicityScore", state.toxicityScore},
+                    {"regime", state.regime},
+                    {"limitLambda", state.limitLambda},
+                    {"cancelLambda", state.cancelLambda},
+                    {"marketableLambda", state.marketableLambda}
                 }}
             };
         }

@@ -52,7 +52,7 @@ cmake --build build
 
 # Run the unified market simulation (agents include market makers,
 # momentum traders, mean-reversion bots, and Poisson noise flow)
-./build/mercury --headless --sim-duration-ms 30000
+./build/mercury --backtest --sim-duration-ms 30000 --backtest-output runs/baseline
 ```
 
 ### Basic Usage in Code

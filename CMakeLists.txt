@@ -231,6 +231,7 @@ set(MERCURY_HEADERS
     include/MarketMakingStrategy.h
     include/MomentumStrategy.h
     include/StrategyManager.h
+    include/BacktestReport.h
     include/MarketData.h
     include/MarketDataPublisher.h
     include/MarketRuntime.h
@@ -255,6 +256,8 @@ add_executable(mercury_tests
     tests/stress_test.cpp
     tests/risk_manager_test.cpp
     tests/pnl_tracker_test.cpp
+    tests/backtest_report_test.cpp
+    tests/server_api_contract_test.cpp
     tests/simulation_runtime_test.cpp
     tests/strategy_test.cpp
     tests/regime_manager_test.cpp
@@ -263,6 +266,7 @@ add_executable(mercury_tests
 target_link_libraries(mercury_tests
     mercury_lib
     GTest::gtest_main
+    nlohmann_json::nlohmann_json
 )
 
 include(GoogleTest)

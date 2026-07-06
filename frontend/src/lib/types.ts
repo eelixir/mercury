@@ -69,16 +69,21 @@ export interface SimulationStatePayload {
   enabled: boolean
   running: boolean
   paused: boolean
-  clockMode: 'realtime' | 'accelerated' | string
+  clockMode: 'realtime' | 'accelerated' | 'instant' | string
   speed: number
   volatility: 'low' | 'normal' | 'high' | string
   simulationTimestamp: number
   marketMakerCount: number
   momentumCount: number
   meanReversionCount: number
+  noiseTraderCount: number
   realizedVolatilityBps: number
   averageSpread: number
   toxicityScore: number
+  regime: 'calm' | 'normal' | 'stressed' | string
+  limitLambda: number
+  cancelLambda: number
+  marketableLambda: number
 }
 
 export interface ExecutionPayload {

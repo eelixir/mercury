@@ -16,6 +16,11 @@ async function postControl(action: string, volatility?: string) {
   }
 }
 
+function formatLambda(value: number | undefined): string {
+  if (value === undefined) return '--'
+  return value.toFixed(3)
+}
+
 export function SimulationControls() {
   const simulation = useActiveBucket().simulation
   const [busy, setBusy] = useState(false)
@@ -46,6 +51,34 @@ export function SimulationControls() {
             <div className="flex justify-between rounded-sm bg-[color:var(--color-bg-panel-alt)] px-2 py-1.5">
               <span>Vol</span>
               <span className="num text-[color:var(--color-text-primary)]">{simulation?.volatility ?? '--'}</span>
+            </div>
+            <div className="flex justify-between rounded-sm bg-[color:var(--color-bg-panel-alt)] px-2 py-1.5">
+              <span>Regime</span>
+              <span className="num text-[color:var(--color-text-primary)]">{simulation?.regime ?? '--'}</span>
+            </div>
+            <div className="flex justify-between rounded-sm bg-[color:var(--color-bg-panel-alt)] px-2 py-1.5">
+              <span>Noise</span>
+              <span className="num text-[color:var(--color-text-primary)]">
+                {simulation?.noiseTraderCount ?? '--'}
+              </span>
+            </div>
+            <div className="flex justify-between rounded-sm bg-[color:var(--color-bg-panel-alt)] px-2 py-1.5">
+              <span>Limit/ms</span>
+              <span className="num text-[color:var(--color-text-primary)]">
+                {formatLambda(simulation?.limitLambda)}
+              </span>
+            </div>
+            <div className="flex justify-between rounded-sm bg-[color:var(--color-bg-panel-alt)] px-2 py-1.5">
+              <span>Cancel/ms</span>
+              <span className="num text-[color:var(--color-text-primary)]">
+                {formatLambda(simulation?.cancelLambda)}
+              </span>
+            </div>
+            <div className="flex justify-between rounded-sm bg-[color:var(--color-bg-panel-alt)] px-2 py-1.5">
+              <span>Mkt/ms</span>
+              <span className="num text-[color:var(--color-text-primary)]">
+                {formatLambda(simulation?.marketableLambda)}
+              </span>
             </div>
           </div>
 
@@ -101,6 +134,29 @@ export function SimulationControls() {
               <option value="low">Low</option>
               <option value="normal">Normal</option>
               <option value="high">High</option>
+            </select>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-[10.5px] uppercase tracking-wider text-[color:var(--color-text-muted)]">
+              Regime
+            </label>
+            <select
+              className="h-9 w-full rounded-sm border border-[color:var(--color-border-subtle)] bg-[color:var(--color-bg-panel-alt)] px-3 text-[12px] text-[color:var(--color-text-primary)] outline-none"
+              disabled={disabled}
+              value={simulation?.regime ?? 'normal'}
+              onChange={async (event) => {
+                setBusy(true)
+                try {
+                  await postControl('set_regime', event.target.value)
+                } finally {
+                  setBusy(false)
+                }
+              }}
+            >
+              <option value="calm">Calm</option>
+              <option value="normal">Normal</option>
+              <option value="stressed">Stressed</option>
             </select>
           </div>
         </div>

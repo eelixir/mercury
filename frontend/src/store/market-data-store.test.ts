@@ -226,14 +226,20 @@ describe('market data store', () => {
         marketMakerCount: 2,
         momentumCount: 3,
         meanReversionCount: 1,
+        noiseTraderCount: 1,
         realizedVolatilityBps: 42.5,
         averageSpread: 5.5,
         toxicityScore: 0.35,
+        regime: 'stressed',
+        limitLambda: 0.03,
+        cancelLambda: 0.08,
+        marketableLambda: 0.06,
       },
     })
 
     expect(needsResync).toBe(false)
     expect(useMarketDataStore.getState().bySymbol['SIM'].simulation?.volatility).toBe('high')
+    expect(useMarketDataStore.getState().bySymbol['SIM'].simulation?.regime).toBe('stressed')
   })
 
   it('keeps per-symbol buckets separate so swapping preserves state', () => {

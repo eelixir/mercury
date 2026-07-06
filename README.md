@@ -1,16 +1,18 @@
 # <img src="https://github.com/user-attachments/assets/7ee41ddf-cf24-42fb-953b-d44c55e9f352" width="400">
 
-> High-performance C++ matching engine and live market simulation dashboard built around a custom intrusive order-book core, Abseil-backed containers, real-time WebSocket streaming, and bounded agent-based microstructure dynamics.
+> Market-making and order-book simulation lab built around a high-performance C++ matching engine, custom intrusive order-book core, instant backtests, real-time WebSocket streaming, and bounded agent-based microstructure dynamics.
 
 ## Overview
 
-Mercury is a low-latency trading engine implementing a full limit order book with price-time priority matching. It ships with a localhost HTTP/WebSocket server, a React dashboard for live visualization, and a unified market simulation runtime where manual browser orders, replayed flow, and built-in agents all trade through the same engine thread.
+Mercury is a local market-making and order-book simulation lab. Its core is a full limit order book with price-time priority matching, wrapped by a unified runtime where manual browser orders, replayed flow, built-in agents, instant backtests, and live real-time simulation all trade through the same engine thread.
+
+The intended use case is experimentation: compare liquidity-provision settings, stress order-flow regimes, inspect queue and P&L behavior, and produce repeatable backtest artifacts without connecting to a live broker or venue.
 
 **Key Metrics:**
 - **3.2M+ orders/sec** sustained throughput
 - **~320 ns** average order insertion latency
 - **O(1)** order lookup, insertion, and cancellation
-- **248** backend tests, all passing
+- **242** backend tests, all passing
 - **Nanosecond** gateway-to-engine latency instrumentation
 
 ## Features
@@ -21,7 +23,9 @@ Mercury is a low-latency trading engine implementing a full limit order book wit
 - **Self-Trade Prevention:** Client ID based filtering
 - **Risk Management:** Pre-trade risk checks with position/exposure limits
 - **P&L Tracking:** Realized and unrealized P&L with FIFO cost basis
-- **Unified Market Runtime:** One runtime for manual orders, replay, built-in agents, and headless simulation
+- **Unified Market Runtime:** One runtime for manual orders, replay, built-in agents, instant backtests, and live real-time simulation
+- **Backtest Artifacts:** Local JSON/CSV output for run summary, config, trades, stats, P&L, and simulation state
+- **Parameter Sweeps:** JSON-driven batch runner for comparing market-maker counts, volatility presets, seeds, and flow mixes
 - **Built-In Agents:** Passive market maker, aggressive momentum trader, mean-reversion bot, Poisson-flow noise trader
 - **Advanced Microstructure:** Queue-position-aware agents, deeper multi-level market-maker quoting, and toxicity-driven spread widening
 - **Regime Manager:** Auto-detected `calm`/`normal`/`stressed` regimes with explicit Poisson λ controls for limit, cancel, and marketable arrival rates, plus Pareto order-size dispersion for whale-vs-retail flow
@@ -120,6 +124,7 @@ mercury/
 │   ├── EngineService.h         # Live engine thread + telemetry
 │   ├── MarketRuntime.h         # Unified simulation/runtime layer
 │   ├── MarketData.h            # Market-data DTOs and sink interfaces
+│   ├── BacktestReport.h        # Backtest summary and artifact writers
 │   ├── MarketDataPublisher.h   # JSON + binary WebSocket publisher
 │   ├── OrderEntryGateway.h     # HTTP order entry handler
 │   ├── BinaryProtocol.h        # Packed binary wire-format structs
@@ -133,7 +138,7 @@ mercury/
 │   ├── MarketDataPublisher.cpp
 │   ├── ServerApp.cpp
 │   └── main.cpp
-├── tests/                      # Google Test suites (248 tests)
+├── tests/                      # Google Test suites (242 tests)
 ├── benchmarks/                 # Optional benchmark target
 ├── frontend/                   # React/Vite/TypeScript dashboard
 ├── data/                       # Sample CSV inputs
@@ -180,6 +185,33 @@ Open `http://127.0.0.1:5173`. Vite proxies `/api` and `/ws` to the backend.
 .\build\mercury.exe --sim --headless --sim-speed 25 --sim-seed 42 --sim-duration-ms 30000 --sim-volatility normal
 ```
 
+### Run An Instant Backtest
+
+```powershell
+.\build\mercury.exe --backtest --sim-seed 42 --sim-duration-ms 30000 --sim-volatility normal --backtest-output runs\baseline
+```
+
+Artifacts include `summary.json`, `config.json`, `trades.csv`, `stats.csv`, `pnl.csv`, and `sim_state.csv`.
+
+### Run A Parameter Sweep
+
+Create a sweep file:
+
+```json
+{
+  "runs": [
+    { "name": "baseline", "seed": 42, "volatility": "normal", "marketMakerCount": 2, "noiseTraderCount": 1 },
+    { "name": "stressed-flow", "seed": 42, "volatility": "high", "marketMakerCount": 3, "noiseTraderCount": 4 }
+  ]
+}
+```
+
+Run all scenarios as instant backtests:
+
+```powershell
+.\build\mercury.exe --sweep runs\sweep.json --sim-duration-ms 30000 --backtest-output runs\sweep
+```
+
 ## HTTP API
 
 | Endpoint | Method | Description |
@@ -187,7 +219,7 @@ Open `http://127.0.0.1:5173`. Vite proxies `/api` and `/ws` to the backend.
 | `/api/health` | GET | Server liveness and runtime status |
 | `/api/state` | GET | Engine metadata, market summary, and simulation state |
 | `/api/orders` | POST | Submit order (limit, market, cancel, modify) |
-| `/api/simulation/control` | POST | Pause, resume, restart, or change volatility |
+| `/api/simulation/control` | POST | Pause, resume, restart, or change volatility/regime |
 
 Example order submission:
 
@@ -252,7 +284,7 @@ Force a specific market regime (`calm`, `normal`, or `stressed`):
 
 ### Simulation State
 
-`sim_state` frames expose:
+`/api/state` and `sim_state` frames expose:
 
 - running and paused state
 - clock mode and speed multiplier
@@ -279,8 +311,8 @@ All fields are little-endian (x86/x64 host order).
 ### File Processing
 
 ```powershell
-.\build\mercury.exe data\sample_orders.csv trades.csv executions.csv riskevents.csv pnl.csv
-.\build\mercury.exe data\sample_orders.csv --concurrent --async-io
+.\build\mercury.exe data\sample_orders_with_clients.csv trades.csv executions.csv riskevents.csv pnl.csv
+.\build\mercury.exe data\sample_orders_with_clients.csv --concurrent --async-io
 ```
 
 ### CLI Flags
@@ -290,11 +322,16 @@ All fields are little-endian (x86/x64 host order).
 | `--server` | `-S` | Start HTTP/WebSocket server |
 | `--sim` | | Enable the living market simulation runtime |
 | `--headless` | | Run the same simulation runtime without the browser server |
+| `--backtest` | | Run headless simulation as fast as possible |
+| `--backtest-output <dir>` | | Write backtest summary/config/trade/stat/PnL/simulation-state artifacts |
+| `--sweep <file>` | | Run multiple instant backtests from a JSON sweep file |
 | `--host <addr>` | | Bind address (default `127.0.0.1`) |
 | `--port <port>` | `-p` | Listen port (default `9001`) |
 | `--symbol <name>` | | Comma-separated list of symbols (default `SIM`) |
 | `--replay <file>` | | CSV replay file |
 | `--replay-speed <x>` | | Replay speed multiplier |
+| `--replay-loop` | | Loop the replay file continuously |
+| `--replay-loop-pause <ms>` | | Pause between replay loops |
 | `--sim-speed <x>` | | Simulation clock speed multiplier |
 | `--sim-seed <n>` | | Deterministic simulation seed |
 | `--sim-volatility <low\|normal\|high>` | | Volatility preset |
@@ -324,13 +361,16 @@ cmake --build build
 
 ## Testing
 
-248 unit tests covering:
+242 unit tests covering:
 - Order book operations (insert, remove, update)
 - Matching engine (limit, market, IOC, FOK)
 - Risk manager (position limits, exposure limits)
 - P&L tracker (realized, unrealized, FIFO cost basis)
 - Market data (sequencing, snapshots, deltas)
+- Server/API contract smoke tests for state JSON, order parsing, order responses, and WebSocket envelopes
 - Unified simulation runtime and agent fanout
+- Instant backtest clock behavior without real-time pacing
+- Backtest report metrics, JSON shape, and CSV escaping
 - Bounded volatility excursion and long-run two-sided book maintenance
 - Trading strategies and legacy migration coverage
 - Concurrency (thread pool, async writers)
@@ -354,6 +394,8 @@ npm run build
 - JSON primary transport, binary secondary for throughput-sensitive consumers
 - Browser writes over HTTP, market data over WebSocket
 - Browser is a thin operator client; the market can stay active without manual orders
+- Instant backtests are headless and CPU-paced; live server simulations remain real-time by default
+- Backtest and sweep artifacts are local files; Mercury is not broker-integrated paper trading
 - Frontend is a separate Vite dev app, not served by C++
 - Python strategy loading is deferred; v1 custom strategies are C++ only
 

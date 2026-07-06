@@ -21,7 +21,8 @@ namespace Mercury {
 
     enum class SimulationClockMode {
         Realtime,
-        Accelerated
+        Accelerated,
+        Instant
     };
 
     enum class SimulationVolatilityPreset {
@@ -34,6 +35,7 @@ namespace Mercury {
         switch (mode) {
             case SimulationClockMode::Realtime: return "realtime";
             case SimulationClockMode::Accelerated: return "accelerated";
+            case SimulationClockMode::Instant: return "instant";
             default: return "realtime";
         }
     }

@@ -148,6 +148,35 @@ TEST(SimulationRuntimeTest, PauseResumeAndVolatilityControlsAffectState) {
     runtime.stop();
 }
 
+TEST(SimulationRuntimeTest, InstantClockAdvancesWithoutRealtimePacing) {
+    auto config = makeSimConfig();
+    config.clockMode = SimulationClockMode::Instant;
+    config.speed = 1.0;
+    config.stepMs = 100;
+    config.publishIntervalMs = 1000;
+    config.marketMakerCount = 0;
+    config.momentumCount = 0;
+    config.meanReversionCount = 0;
+    config.noiseTraderCount = 0;
+
+    MarketRuntime runtime("SIM", config);
+    const auto start = std::chrono::steady_clock::now();
+    runtime.start();
+
+    ASSERT_TRUE(waitUntil([&]() {
+        return runtime.getState().simulationTimestamp >= 5000;
+    }, 1000));
+
+    const auto state = runtime.getState();
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start).count();
+    runtime.stop();
+
+    EXPECT_EQ(state.clockMode, "instant");
+    EXPECT_GE(state.simulationTimestamp, 5000u);
+    EXPECT_LT(elapsedMs, 1000);
+}
+
 TEST(SimulationRuntimeTest, MaintainsTwoSidedBookAndKeepsTradingOverLongRun) {
     auto config = makeSimConfig();
     config.speed = 500.0;

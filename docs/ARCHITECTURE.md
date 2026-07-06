@@ -6,7 +6,7 @@ This document describes the architecture that is present in the repository today
 
 `CMakeLists.txt` defines the backend build graph:
 
-- `mercury`: executable with terminal, file-processing, unified simulation, headless, replay, and server modes
+- `mercury`: executable with terminal, file-processing, unified simulation, instant backtest, headless, replay, and server modes
 - `mercury_lib`: core library used by tests and benchmarks
 - `mercury_tests`: Google Test binary linked against `mercury_lib`
 - `mercury_benchmarks`: optional benchmark binary when `MERCURY_BUILD_BENCHMARKS=ON`
@@ -31,24 +31,31 @@ The frontend is not served from the C++ executable in v1.
 
 ## Runtime Modes
 
-`src/main.cpp` now centers runtime behavior on one market simulation stack:
+`src/main.cpp` now centers runtime behavior on one market-making and order-book simulation stack:
 
 1. Interactive demo mode when no input file or major mode flag is provided
 2. CSV file-processing mode for batch execution and output files
 3. Unified simulation runtime via `--sim`
 4. Local server mode via `--server`
 5. Headless accelerated simulation via `--sim --headless`
+6. Instant backtest mode via `--backtest`
+7. JSON-driven parameter sweeps via `--sweep`
 
 Simulation and server flags:
 
 - `--server`
 - `--sim`
 - `--headless`
+- `--backtest`
+- `--backtest-output <dir>`
+- `--sweep <file>`
 - `--host <host>`
 - `--port <port>`
 - `--symbol <name>`
 - `--replay <file>`
 - `--replay-speed <x>`
+- `--replay-loop`
+- `--replay-loop-pause <ms>`
 - `--sim-speed <x>`
 - `--sim-seed <n>`
 - `--sim-volatility <low|normal|high>`
@@ -138,6 +145,19 @@ Responsibilities:
 - route manual orders, replay orders, and simulated-agent flow into the same submission path
 - maintain runtime metrics such as realized volatility and average spread
 - fan out engine and simulation events to multiple subscribers
+
+Clock modes:
+
+- `realtime`: live simulation pacing, used by `--server --sim` by default
+- `accelerated`: headless simulation with compressed sleeps, controlled by `--sim-speed`
+- `instant`: backtest mode with no per-step sleep, used by `--backtest`
+
+Backtest reporting:
+
+- `--backtest-output <dir>` records `summary.json`, `config.json`, `trades.csv`, `stats.csv`, `pnl.csv`, and `sim_state.csv`
+- `include/BacktestReport.h` owns the derived run metrics and artifact writers
+- report metrics include effective speed, trade count, volume, final mid, realized volatility, average spread, max drawdown, final regime, and toxicity
+- `--sweep <file>` reads a JSON array or `{ "runs": [...] }`, applies per-run simulation overrides, forces instant clock mode, and writes per-run artifacts plus `sweep_summary.json` and `sweep_summary.csv` when an output directory is supplied
 
 Design constraints:
 
@@ -274,7 +294,7 @@ Internal DTOs:
 - `PnLEvent`
 - `SimulationStateEvent`
 
-`SimulationStateEvent` also carries simulation microstructure state such as regime intensities and `toxicityScore`, so the dashboard and external clients can distinguish normal volatility from adverse-selection pressure.
+`SimulationStateEvent` and `/api/state` also carry simulation microstructure state such as noise-trader count, regime intensities, and `toxicityScore`, so the dashboard and external clients can distinguish normal volatility from adverse-selection pressure.
 
 Every outbound event carries:
 
@@ -363,14 +383,14 @@ Relevant frontend areas:
 State model:
 
 - one live store keyed by symbol
-- tracked fields include sequence, bids, asks, trades, stats, connection state, per-client PnL, engine latency, throughput, and simulation state
+- tracked fields include sequence, bids, asks, trades, stats, connection state, per-client PnL, engine latency, throughput, and simulation state including regime, noise-trader count, and arrival intensities
 - submitted order IDs are tracked in a `Set<number>` for self-trade detection in the trade tape
 
 UI layout:
 
 - Top Bar: system status, spread, mid, top-of-book, connection state, clock
 - Stats Strip: bid, ask, mid, spread, spread bps, trades, volume, orders, bid/ask levels
-- Left column: order entry form, PnL card, simulation controls, system health card
+- Left column: order entry form, PnL card, simulation controls with volatility/regime controls, system health card
 - Center column: mid-price chart above, L2 order book ladder below
 - Right column: scrolling trade tape with uptick/downtick and self-trade highlighting
 - Status Bar: WS state, active client, trade count, volume, bid/ask levels, timezone, version
@@ -382,7 +402,7 @@ Client behavior:
 - subsequent deltas update only affected levels
 - sequence gaps trigger resync logic instead of blindly applying out-of-order frames
 - `execution` envelopes are accepted as sequencing events without changing book state
-- `sim_state` updates drive the operator controls and runtime status badges
+- `sim_state` updates drive the operator controls, regime/noise telemetry, and runtime status badges
 - order entry uses `POST /api/orders` with an editable `clientId`
 - submitted order IDs are tracked so the trade tape can highlight the user's own fills
 - `engineLatencyNs` from `book_delta` and `trade` payloads feeds the System Health card
@@ -411,6 +431,8 @@ High-signal backend suites:
 - `tests/market_data_test.cpp`
 - `tests/simulation_runtime_test.cpp`
 - `tests/regime_manager_test.cpp`
+- `tests/server_api_contract_test.cpp`
+- `tests/backtest_report_test.cpp`
 - `tests/order_validation_test.cpp`
 - `tests/risk_manager_test.cpp`
 - `tests/pnl_tracker_test.cpp`
@@ -427,6 +449,13 @@ For market-runtime or dashboard changes, treat both backend and frontend tests a
 - long-run two-sided book maintenance
 - continued trading over time
 - bounded volatility excursion under deterministic accelerated simulation
+- instant clock advancement without real-time pacing
+
+`tests/backtest_report_test.cpp` covers:
+
+- derived backtest metrics such as effective speed, min/max mid, max drawdown, final regime, and final toxicity
+- JSON summary shape for agent counts
+- CSV escaping used by report artifact writers
 
 `tests/regime_manager_test.cpp` covers:
 
@@ -436,3 +465,10 @@ For market-runtime or dashboard changes, treat both backend and frontend tests a
 - Pareto order-size dispersion producing whale-vs-retail distributions within expected tail bounds
 - `samplePoissonCount` matching the expected mean across many draws
 - runtime integration: `MarketRuntimeState` publishes regime label + λ values, and enabling noise traders measurably increases traded volume
+
+`tests/server_api_contract_test.cpp` covers:
+
+- `/api/state` simulation JSON fields for regime, noise traders, and arrival intensities
+- `/api/orders` request parsing and execution-response shape
+- JSON WebSocket snapshot and `sim_state` envelope shape
+- simulation control state after forcing a market regime
