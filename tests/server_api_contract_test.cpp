@@ -170,6 +170,7 @@ TEST(ServerApiContractTest, SimulationStateEnvelopeIncludesRegimeNoiseAndLambdas
     state.marketMakerLevels = 3;
     state.marketMakerQuoteQuantity = 80;
     state.marketMakerBaseSpreadTicks = 4;
+    state.marketMakerInventorySkewDivisor = 70;
 
     const auto envelope = helpers::json::parse(helpers::simStateEnvelope(state));
     const auto& payload = envelope.at("payload");
@@ -181,6 +182,7 @@ TEST(ServerApiContractTest, SimulationStateEnvelopeIncludesRegimeNoiseAndLambdas
     EXPECT_DOUBLE_EQ(payload.at("cancelLambda").get<double>(), 0.012);
     EXPECT_DOUBLE_EQ(payload.at("marketableLambda").get<double>(), 0.0048);
     EXPECT_EQ(payload.at("marketMaker").at("levels").get<size_t>(), 3u);
+    EXPECT_EQ(payload.at("marketMaker").at("inventorySkewDivisor").get<int64_t>(), 70);
 }
 
 TEST(ServerApiContractTest, AgentMetricsEnvelopeMatchesJsonWebSocketShape) {
@@ -251,4 +253,25 @@ TEST(ServerApiContractTest, SimulationControlCanSetAgentCountsAndMarketMakerConf
     EXPECT_EQ(state.momentumCount, 3u);
     EXPECT_EQ(state.marketMaker.levels, 5u);
     EXPECT_EQ(state.marketMaker.quoteQuantity, 120u);
+}
+
+TEST(ServerApiContractTest, SimulationControlCanSetLiveTiming) {
+    SimulationConfig config;
+    config.enabled = true;
+
+    MarketRuntime runtime("SIM", config);
+
+    SimulationControl timing;
+    timing.action = "set_timing";
+    timing.hasTiming = true;
+    timing.clockMode = "accelerated";
+    timing.speed = 25.0;
+    ASSERT_TRUE(runtime.applyControl(timing));
+
+    auto state = runtime.getState();
+    EXPECT_EQ(state.clockMode, "accelerated");
+    EXPECT_DOUBLE_EQ(state.simulationSpeed, 25.0);
+
+    timing.clockMode = "instant";
+    EXPECT_FALSE(runtime.applyControl(timing));
 }

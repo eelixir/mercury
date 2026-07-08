@@ -142,6 +142,7 @@ namespace Mercury {
         int64_t marketMakerBaseSpreadTicks = 0;
         double marketMakerToxicitySensitivity = 0.0;
         uint64_t marketMakerWakeIntervalMs = 0;
+        int64_t marketMakerInventorySkewDivisor = 50;
     };
 
     struct AgentMetricsEvent {

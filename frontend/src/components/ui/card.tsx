@@ -25,7 +25,7 @@ export function CardHeader({
         <span className="panel-title truncate">{title}</span>
         {subtitle ? <span className="panel-subtitle truncate">{subtitle}</span> : null}
       </div>
-      {actions ? <div className="flex items-center gap-2 shrink-0">{actions}</div> : null}
+      {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
     </div>
   )
 }

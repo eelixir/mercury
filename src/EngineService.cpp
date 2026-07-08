@@ -443,9 +443,16 @@ namespace Mercury {
         stats.messagesPerSecond = currentMps_;
         ++messageCount_;
 
-        std::lock_guard<std::mutex> lock(sinkMutex_);
-        if (sink_) {
-            sink_->onStatsEvent(stats);
+        {
+            std::lock_guard<std::mutex> lock(sinkMutex_);
+            if (sink_) {
+                sink_->onStatsEvent(stats);
+            }
+        }
+
+        if (stats.midPrice > 0 && it->second->pnlTracker.getClientCount() > 0) {
+            activeSymbol_ = symbol;
+            it->second->pnlTracker.publishMarkToMarket(stats.midPrice);
         }
     }
 

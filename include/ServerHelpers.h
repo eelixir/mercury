@@ -278,7 +278,8 @@ namespace Mercury {
                     {"minQuantity", state.marketMakerMinQuantity},
                     {"baseSpreadTicks", state.marketMakerBaseSpreadTicks},
                     {"toxicitySensitivity", state.marketMakerToxicitySensitivity},
-                    {"wakeIntervalMs", state.marketMakerWakeIntervalMs}
+                    {"wakeIntervalMs", state.marketMakerWakeIntervalMs},
+                    {"inventorySkewDivisor", state.marketMakerInventorySkewDivisor}
                 }}
             };
             return envelopeToJson("sim_state", state.sequence, state.symbol, std::move(payload)).dump();

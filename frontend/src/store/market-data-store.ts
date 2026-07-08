@@ -12,11 +12,13 @@ import type {
 } from '../lib/types'
 
 const MAX_TRADES = 120
-const MAX_POINTS = 240
 
 export interface ChartPoint {
   timestamp: number
-  value: number
+  open: number
+  high: number
+  low: number
+  close: number
 }
 
 export interface SymbolBucket {
@@ -110,6 +112,63 @@ function updateBucket(
   return { ...bySymbol, [symbol]: { ...current, ...patch } }
 }
 
+function chartSecond(timestamp: number): number {
+  return Math.floor(timestamp / 1000)
+}
+
+function newChartCandle(timestamp: number, price: number): ChartPoint {
+  return {
+    timestamp,
+    open: price,
+    high: price,
+    low: price,
+    close: price,
+  }
+}
+
+function updateChartCandle(candle: ChartPoint, timestamp: number, price: number): ChartPoint {
+  return {
+    timestamp,
+    open: candle.open,
+    high: Math.max(candle.high, price),
+    low: Math.min(candle.low, price),
+    close: price,
+  }
+}
+
+function appendChartPoint(points: ChartPoint[], point: { timestamp: number; value: number }): ChartPoint[] {
+  if (point.value <= 0) return points
+
+  const nextSecond = chartSecond(point.timestamp)
+  const last = points.at(-1)
+  if (!last) return [newChartCandle(point.timestamp, point.value)]
+
+  const lastSecond = chartSecond(last.timestamp)
+  if (nextSecond > lastSecond) {
+    return [...points, newChartCandle(point.timestamp, point.value)]
+  }
+
+  if (nextSecond === lastSecond) {
+    if (last.timestamp === point.timestamp && last.close === point.value) {
+      return points
+    }
+    return [...points.slice(0, -1), updateChartCandle(last, point.timestamp, point.value)]
+  }
+
+  const bySecond = new Map<number, ChartPoint>()
+  for (const existing of points) {
+    bySecond.set(chartSecond(existing.timestamp), existing)
+  }
+  const existing = bySecond.get(nextSecond)
+  bySecond.set(
+    nextSecond,
+    existing
+      ? updateChartCandle(existing, point.timestamp, point.value)
+      : newChartCandle(point.timestamp, point.value),
+  )
+  return Array.from(bySecond.values()).sort((left, right) => left.timestamp - right.timestamp)
+}
+
 export const useMarketDataStore = create<MarketDataState>((set, get) => ({
   activeSymbol: 'SIM',
   symbols: ['SIM'],
@@ -158,20 +217,15 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
     if (!symbol) return false
 
     const state = get()
-    const isStreamSequenced = envelope.type !== 'snapshot' && envelope.type !== 'sim_state'
-
-    const isGap =
-      isStreamSequenced &&
-      state.streamSequence !== 0 &&
-      envelope.sequence > state.streamSequence + 1
-
-    if (isGap) {
-      return true
-    }
+    const updatesMarketSequence =
+      envelope.type === 'snapshot' ||
+      envelope.type === 'book_delta' ||
+      envelope.type === 'trade' ||
+      envelope.type === 'stats'
 
     const symbolSequence = state.bySymbol[symbol]?.sequence ?? 0
     if (
-      isStreamSequenced &&
+      updatesMarketSequence &&
       state.streamSequence !== 0 &&
       envelope.sequence <= state.streamSequence &&
       envelope.sequence <= symbolSequence
@@ -183,9 +237,9 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
       const ensured = ensureSymbol(prev.symbols, prev.bySymbol, symbol)
       const bucket = ensured.bySymbol[symbol]
       const streamSequence =
-        envelope.type === 'sim_state'
-          ? prev.streamSequence
-          : Math.max(prev.streamSequence, envelope.sequence)
+        updatesMarketSequence
+          ? Math.max(prev.streamSequence, envelope.sequence)
+          : prev.streamSequence
 
       let activePatch: Partial<MarketDataState> | null = null
       if (prev.activeSymbol === '' || !prev.symbols.includes(prev.activeSymbol)) {
@@ -206,13 +260,10 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
           timestamp: envelope.payload.timestamp,
         }
 
-        const nextChartPoints =
-          envelope.payload.midPrice > 0
-            ? [
-                ...bucket.chartPoints,
-                { timestamp: envelope.payload.timestamp, value: envelope.payload.midPrice },
-              ].slice(-MAX_POINTS)
-            : bucket.chartPoints
+        const nextChartPoints = appendChartPoint(bucket.chartPoints, {
+          timestamp: envelope.payload.timestamp,
+          value: envelope.payload.midPrice,
+        })
 
         return {
           symbols: ensured.symbols,
@@ -279,13 +330,10 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
       }
 
       if (envelope.type === 'stats') {
-        const nextPoints =
-          envelope.payload.midPrice > 0
-            ? [
-                ...bucket.chartPoints,
-                { timestamp: envelope.payload.timestamp, value: envelope.payload.midPrice },
-              ].slice(-MAX_POINTS)
-            : bucket.chartPoints
+        const nextPoints = appendChartPoint(bucket.chartPoints, {
+          timestamp: envelope.payload.timestamp,
+          value: envelope.payload.midPrice,
+        })
 
         return {
           symbols: ensured.symbols,
@@ -301,13 +349,61 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
       }
 
       if (envelope.type === 'sim_state') {
+        const previousSimulationTimestamp = bucket.simulation?.simulationTimestamp
+        const isRuntimeReset =
+          previousSimulationTimestamp !== undefined &&
+          envelope.payload.simulationTimestamp < previousSimulationTimestamp
+        const serverSymbols = envelope.payload.symbols?.filter(Boolean).sort()
+        let nextSymbols = ensured.symbols
+        let nextBySymbol = ensured.bySymbol
+        let nextActivePatch = activePatch
+
+        if (serverSymbols && serverSymbols.length > 0) {
+          const allowedSymbols = new Set(serverSymbols)
+          nextSymbols = serverSymbols
+          nextBySymbol = Object.fromEntries(
+            Object.entries(ensured.bySymbol).filter(([key]) => allowedSymbols.has(key)),
+          )
+
+          for (const serverSymbol of serverSymbols) {
+            if (!nextBySymbol[serverSymbol]) {
+              nextBySymbol[serverSymbol] = newBucket()
+            }
+          }
+
+          if (prev.activeSymbol === '' || !allowedSymbols.has(prev.activeSymbol)) {
+            nextActivePatch = {
+              ...(nextActivePatch ?? {}),
+              activeSymbol: allowedSymbols.has(symbol) ? symbol : serverSymbols[0],
+            }
+          }
+        }
+
+        if (isRuntimeReset) {
+          return {
+            symbols: nextSymbols,
+            streamSequence: 0,
+            bySymbol: {
+              ...nextBySymbol,
+              [symbol]: {
+                ...newBucket(),
+                sequence: envelope.sequence,
+                simulation: envelope.payload,
+              },
+            },
+            submittedOrderIds: new Set<number>(),
+            lastOrderResponse: null,
+            ...(nextActivePatch ?? {}),
+          }
+        }
+
         return {
-          symbols: ensured.symbols,
-          bySymbol: updateBucket(ensured.bySymbol, symbol, {
+          symbols: nextSymbols,
+          bySymbol: updateBucket(nextBySymbol, symbol, {
             sequence: Math.max(bucket.sequence, envelope.sequence),
             simulation: envelope.payload,
           }),
-          ...(activePatch ?? {}),
+          ...(nextActivePatch ?? {}),
         }
       }
 
@@ -316,7 +412,6 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
           symbols: ensured.symbols,
           streamSequence,
           bySymbol: updateBucket(ensured.bySymbol, symbol, {
-            sequence: Math.max(bucket.sequence, envelope.sequence),
             agentMetricsByClient: {
               ...bucket.agentMetricsByClient,
               [envelope.payload.clientId]: envelope.payload,
@@ -330,14 +425,22 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
         return {
           symbols: ensured.symbols,
           streamSequence,
-          bySymbol: updateBucket(ensured.bySymbol, symbol, {
-            sequence: Math.max(bucket.sequence, envelope.sequence),
-          }),
+          bySymbol: ensured.bySymbol,
           ...(activePatch ?? {}),
         }
       }
 
       // pnl
+      const existingPnl = bucket.pnlByClient[envelope.payload.clientId]
+      if (existingPnl && envelope.payload.timestamp < existingPnl.timestamp) {
+        return {
+          symbols: ensured.symbols,
+          streamSequence,
+          bySymbol: ensured.bySymbol,
+          ...(activePatch ?? {}),
+        }
+      }
+
       const nextPnl = {
         ...bucket.pnlByClient,
         [envelope.payload.clientId]: envelope.payload,
@@ -347,7 +450,6 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
         symbols: ensured.symbols,
         streamSequence,
         bySymbol: updateBucket(ensured.bySymbol, symbol, {
-          sequence: Math.max(bucket.sequence, envelope.sequence),
           pnlByClient: nextPnl,
         }),
         ...(activePatch ?? {}),

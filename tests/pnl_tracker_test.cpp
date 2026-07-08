@@ -387,6 +387,32 @@ TEST_F(PnLTrackerTest, PnLCallback) {
     EXPECT_EQ(lastSnapshot.netPosition, 10);
 }
 
+TEST_F(PnLTrackerTest, PublishMarkToMarketEmitsCallbacks) {
+    PnLTracker tracker(testFile);
+    tracker.open();
+
+    Trade trade;
+    trade.tradeId = 1;
+    trade.price = 100;
+    trade.quantity = 10;
+    tracker.onTradeExecuted(trade, 1, 0, trade.price);
+
+    int callbackCount = 0;
+    PnLSnapshot lastSnapshot;
+    tracker.setPnLCallback([&callbackCount, &lastSnapshot](const PnLSnapshot& snapshot) {
+        callbackCount++;
+        lastSnapshot = snapshot;
+    });
+
+    tracker.publishMarkToMarket(120);
+
+    EXPECT_EQ(callbackCount, 1);
+    EXPECT_EQ(lastSnapshot.clientId, 1);
+    EXPECT_EQ(lastSnapshot.netPosition, 10);
+    EXPECT_EQ(lastSnapshot.unrealizedPnL, 200);
+    EXPECT_EQ(lastSnapshot.totalPnL, 200);
+}
+
 // ==================== PnLWriter Tests ====================
 
 class PnLWriterTest : public ::testing::Test {

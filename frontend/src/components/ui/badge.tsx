@@ -11,11 +11,11 @@ export function Badge({
   dot?: boolean
 }) {
   const toneClass = {
-    neutral: 'text-[color:var(--color-text-secondary)] bg-white/[0.03] border-[color:var(--color-border-subtle)]',
-    buy: 'text-[color:var(--color-buy)] bg-[color:var(--color-buy-dim)] border-transparent',
-    sell: 'text-[color:var(--color-sell)] bg-[color:var(--color-sell-dim)] border-transparent',
-    live: 'text-[color:var(--color-buy)] bg-[color:var(--color-buy-dim)] border-transparent',
-    warn: 'text-[color:var(--color-warn)] bg-[color:var(--color-warn)]/10 border-transparent',
+    neutral: 'text-[color:var(--color-text-secondary)] bg-black border-[color:var(--color-border-subtle)]',
+    buy: 'text-[color:var(--color-buy)] bg-[color:var(--color-buy-dim)] border-[color:var(--color-buy)]/30',
+    sell: 'text-[color:var(--color-sell)] bg-[color:var(--color-sell-dim)] border-[color:var(--color-sell)]/30',
+    live: 'text-[color:var(--color-buy)] bg-[color:var(--color-buy-dim)] border-[color:var(--color-buy)]/30',
+    warn: 'text-[color:var(--color-warn)] bg-[color:var(--color-amber-dim)] border-[color:var(--color-warn)]/30',
   }[tone]
 
   const dotColor = {
@@ -29,7 +29,7 @@ export function Badge({
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-sm border px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wider',
+        'inline-flex items-center gap-1.5 border px-1.5 py-[1px] text-[10px] font-bold uppercase',
         toneClass,
       )}
     >

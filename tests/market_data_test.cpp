@@ -115,3 +115,29 @@ TEST(MarketDataTest, EngineServicePublishesSequencedDeltasTradesStatsAndPnL) {
     EXPECT_EQ(trade.buyClientId, 1u);
     EXPECT_EQ(trade.sellClientId, 2u);
 }
+
+TEST(MarketDataTest, EngineServicePublishesMarkToMarketPnLOnStatsUpdates) {
+    EngineService service({"SIM"});
+    RecordingSink sink;
+    service.setMarketDataSink(&sink);
+    service.start();
+
+    ASSERT_EQ(service.submitOrder("SIM", makeLimitOrder(1, Side::Sell, 100, 10, 2)).status,
+              ExecutionStatus::Resting);
+    ASSERT_EQ(service.submitOrder("SIM", makeLimitOrder(2, Side::Buy, 100, 10, 1)).status,
+              ExecutionStatus::Filled);
+
+    service.submitOrder("SIM", makeLimitOrder(3, Side::Buy, 118, 5, 3));
+    service.submitOrder("SIM", makeLimitOrder(4, Side::Sell, 122, 5, 4));
+
+    service.stop();
+
+    auto clientOne = std::find_if(sink.pnlEvents.rbegin(), sink.pnlEvents.rend(), [](const PnLEvent& event) {
+        return event.clientId == 1;
+    });
+
+    ASSERT_NE(clientOne, sink.pnlEvents.rend());
+    EXPECT_EQ(clientOne->netPosition, 10);
+    EXPECT_EQ(clientOne->unrealizedPnL, 200);
+    EXPECT_EQ(clientOne->totalPnL, 200);
+}

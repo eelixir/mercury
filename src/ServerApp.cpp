@@ -1,5 +1,6 @@
 #include "ServerApp.h"
 
+#include "BacktestRunner.h"
 #include "MarketDataPublisher.h"
 #include "OrderEntryGateway.h"
 #include "ServerHelpers.h"
@@ -8,8 +9,10 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <filesystem>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -29,6 +32,100 @@ namespace Mercury {
 
         size_t clampDepth(size_t depth) {
             return std::min<size_t>(MAX_L2_DEPTH, std::max<size_t>(1, depth));
+        }
+
+        std::string jsonStringOrEmpty(const json& parsed, const char* key) {
+            return parsed.contains(key) && parsed.at(key).is_string()
+                ? parsed.at(key).get<std::string>()
+                : std::string();
+        }
+
+        std::string scenarioFileFromRequest(const json& parsed) {
+            auto scenarioFile = jsonStringOrEmpty(parsed, "scenarioFile");
+            if (!scenarioFile.empty()) {
+                return scenarioFile;
+            }
+
+            const auto scenarioId = jsonStringOrEmpty(parsed, "scenarioId");
+            if (!scenarioId.empty()) {
+                return (std::filesystem::path("scenarios") / (scenarioId + ".json")).string();
+            }
+
+            return {};
+        }
+
+        ServerOptions labOptionsFromRequest(const ServerOptions& baseOptions,
+                                            const json& parsed,
+                                            const std::string& mode) {
+            ServerOptions labOptions = baseOptions;
+            labOptions.replayFile = std::nullopt;
+            labOptions.sweepFile = std::nullopt;
+            labOptions.backtestOutputDir = std::nullopt;
+            labOptions.scenarioFile = std::nullopt;
+            labOptions.marketMakerConfigFile = std::nullopt;
+            labOptions.calibrationReplayFile = std::nullopt;
+            labOptions.replaySpeed = 1.0;
+            labOptions.replayLoop = false;
+            labOptions.replayLoopPauseMs = 1000;
+
+            const bool forceInstant = mode != "headless";
+            labOptions.simulation.enabled = true;
+            labOptions.simulation.headless = true;
+            labOptions.simulation.clockMode = forceInstant
+                ? SimulationClockMode::Instant
+                : SimulationClockMode::Accelerated;
+
+            const auto scenarioFile = scenarioFileFromRequest(parsed);
+            if (!scenarioFile.empty()) {
+                labOptions.scenarioFile = scenarioFile;
+                applyScenarioDocument(labOptions, readJsonFile(scenarioFile), forceInstant);
+            }
+
+            auto mmConfigFile = jsonStringOrEmpty(parsed, "marketMakerConfigFile");
+            if (mmConfigFile.empty()) {
+                mmConfigFile = jsonStringOrEmpty(parsed, "mmConfigFile");
+            }
+            if (!mmConfigFile.empty()) {
+                labOptions.marketMakerConfigFile = mmConfigFile;
+                const auto mmConfig = readJsonFile(mmConfigFile);
+                if (mmConfig.contains("marketMaker") && mmConfig.at("marketMaker").is_object()) {
+                    applyMarketMakerOverrides(labOptions.simulation.marketMaker, mmConfig.at("marketMaker"));
+                } else {
+                    applyMarketMakerOverrides(labOptions.simulation.marketMaker, mmConfig);
+                }
+            }
+
+            applyRunOverrides(labOptions, parsed, forceInstant);
+
+            const auto outputDir = jsonStringOrEmpty(parsed, "outputDir");
+            if (!outputDir.empty()) {
+                labOptions.backtestOutputDir = outputDir;
+            }
+
+            if (mode == "sweep") {
+                const auto sweepFile = jsonStringOrEmpty(parsed, "sweepFile");
+                if (sweepFile.empty()) {
+                    throw std::runtime_error("sweepFile is required");
+                }
+                labOptions.sweepFile = sweepFile;
+            }
+
+            if (mode == "calibrate_replay") {
+                auto replayFile = jsonStringOrEmpty(parsed, "calibrationReplayFile");
+                if (replayFile.empty()) {
+                    replayFile = jsonStringOrEmpty(parsed, "replayFile");
+                }
+                if (replayFile.empty()) {
+                    throw std::runtime_error("replayFile is required for calibration");
+                }
+                labOptions.calibrationReplayFile = replayFile;
+                labOptions.replayFile = replayFile;
+                if (!parsed.contains("replaySpeed") && labOptions.replaySpeed == 1.0) {
+                    labOptions.replaySpeed = 1.0e12;
+                }
+            }
+
+            return labOptions;
         }
 
     }
@@ -88,6 +185,7 @@ namespace Mercury {
                 event.marketMakerBaseSpreadTicks = state.marketMaker.baseSpreadTicks;
                 event.marketMakerToxicitySensitivity = state.marketMaker.toxicitySensitivity;
                 event.marketMakerWakeIntervalMs = state.marketMaker.wakeIntervalMs;
+                event.marketMakerInventorySkewDivisor = state.marketMaker.inventorySkewDivisor;
                 ws->send(simStateEnvelope(event), uWS::OpCode::TEXT);
             }
         };
@@ -147,6 +245,13 @@ namespace Mercury {
                     control.volatility = parsed.value("volatility", std::string("normal"));
                     control.scenario = parsed.value("scenario", std::string());
 
+                    if (parsed.contains("clockMode") || parsed.contains("speed")) {
+                        const auto current = runtime.getState();
+                        control.hasTiming = true;
+                        control.clockMode = parsed.value("clockMode", current.clockMode);
+                        control.speed = parsed.value("speed", current.simulationSpeed);
+                    }
+
                     if (parsed.contains("marketMakerCount") ||
                         parsed.contains("momentumCount") ||
                         parsed.contains("meanReversionCount") ||
@@ -187,6 +292,136 @@ namespace Mercury {
                 } catch (const std::exception& ex) {
                     writeJson(res, "400 Bad Request", json{
                         {"error", "invalid_request"},
+                        {"message", ex.what()}
+                    });
+                }
+            });
+        });
+
+        app.post("/api/replay/control", [&runtime](auto* res, auto* /*req*/) {
+            auto body = std::make_shared<std::string>();
+
+            res->onAborted([body]() {
+                (void) body;
+            });
+
+            res->onData([body, res, &runtime](std::string_view chunk, bool isLast) {
+                body->append(chunk.data(), chunk.size());
+                if (!isLast) {
+                    return;
+                }
+
+                try {
+                    const auto parsed = json::parse(*body);
+                    const auto action = parsed.value("action", std::string());
+
+                    if (action == "stop") {
+                        runtime.stopReplay();
+                        writeJson(res, "200 OK", json{
+                            {"status", "ok"},
+                            {"replayActive", runtime.isReplayActive()}
+                        });
+                        return;
+                    }
+
+                    if (action == "start") {
+                        const auto replayFile = parsed.value("replayFile", std::string());
+                        if (replayFile.empty()) {
+                            writeJson(res, "400 Bad Request", json{
+                                {"error", "invalid_request"},
+                                {"message", "replayFile is required"}
+                            });
+                            return;
+                        }
+
+                        const auto speed = parsed.value("speed", 1.0);
+                        const auto loop = parsed.value("loop", false);
+                        const auto loopPauseMs = parsed.value("loopPauseMs", uint64_t{1000});
+                        if (!runtime.startReplay(replayFile, speed, loop, loopPauseMs)) {
+                            writeJson(res, "400 Bad Request", json{
+                                {"error", "invalid_replay"},
+                                {"message", "Failed to start replay"}
+                            });
+                            return;
+                        }
+
+                        writeJson(res, "200 OK", json{
+                            {"status", "ok"},
+                            {"replayActive", runtime.isReplayActive()}
+                        });
+                        return;
+                    }
+
+                    writeJson(res, "400 Bad Request", json{
+                        {"error", "invalid_control"},
+                        {"message", "Unsupported replay control action"}
+                    });
+                } catch (const std::exception& ex) {
+                    writeJson(res, "400 Bad Request", json{
+                        {"error", "invalid_request"},
+                        {"message", ex.what()}
+                    });
+                }
+            });
+        });
+
+        app.post("/api/lab/run", [&options](auto* res, auto* /*req*/) {
+            auto body = std::make_shared<std::string>();
+
+            res->onAborted([body]() {
+                (void) body;
+            });
+
+            res->onData([body, res, &options](std::string_view chunk, bool isLast) {
+                body->append(chunk.data(), chunk.size());
+                if (!isLast) {
+                    return;
+                }
+
+                try {
+                    const auto parsed = json::parse(*body);
+                    const auto mode = parsed.value("mode", std::string("backtest"));
+                    if (mode != "backtest" && mode != "headless" &&
+                        mode != "sweep" && mode != "calibrate_replay") {
+                        writeJson(res, "400 Bad Request", json{
+                            {"error", "invalid_lab_mode"},
+                            {"message", "mode must be backtest, headless, sweep, or calibrate_replay"}
+                        });
+                        return;
+                    }
+
+                    auto labOptions = labOptionsFromRequest(options, parsed, mode);
+                    const auto outputDir = labOptions.backtestOutputDir
+                        ? std::optional<std::filesystem::path>(std::filesystem::path(*labOptions.backtestOutputDir))
+                        : std::nullopt;
+
+                    if (mode == "sweep") {
+                        auto result = runBacktestSweepResults(std::move(labOptions), false);
+                        auto response = backtestSweepResultToJson(result);
+                        response["status"] = "ok";
+                        response["mode"] = mode;
+                        if (outputDir) {
+                            response["outputDir"] = pathString(*outputDir);
+                        }
+                        writeJson(res, "200 OK", response);
+                        return;
+                    }
+
+                    const auto fallbackName = mode == "calibrate_replay"
+                        ? std::string("replay-calibration")
+                        : mode;
+                    const auto runName = parsed.value("name", fallbackName);
+                    auto result = runBacktestOnce(std::move(labOptions), runName, false, outputDir);
+                    auto response = backtestRunResultToJson(result);
+                    response["status"] = "ok";
+                    response["mode"] = mode;
+                    if (outputDir) {
+                        response["outputDir"] = pathString(*outputDir);
+                    }
+                    writeJson(res, "200 OK", response);
+                } catch (const std::exception& ex) {
+                    writeJson(res, "400 Bad Request", json{
+                        {"error", "invalid_lab_request"},
                         {"message", ex.what()}
                     });
                 }

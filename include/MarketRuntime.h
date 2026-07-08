@@ -40,6 +40,12 @@ namespace Mercury {
         }
     }
 
+    inline SimulationClockMode simulationClockModeFromString(const std::string& value) {
+        if (value == "accelerated") return SimulationClockMode::Accelerated;
+        if (value == "instant") return SimulationClockMode::Instant;
+        return SimulationClockMode::Realtime;
+    }
+
     inline const char* simulationVolatilityToString(SimulationVolatilityPreset preset) {
         switch (preset) {
             case SimulationVolatilityPreset::Low: return "low";
@@ -157,6 +163,9 @@ namespace Mercury {
         size_t meanReversionCount = 0;
         size_t noiseTraderCount = 0;
         bool hasAgentCounts = false;
+        std::string clockMode;
+        double speed = 1.0;
+        bool hasTiming = false;
         MarketMakerConfig marketMaker;
         bool hasMarketMakerConfig = false;
     };

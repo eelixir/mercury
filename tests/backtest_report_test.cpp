@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "BacktestReport.h"
+#include "BacktestRunner.h"
 
 using namespace Mercury;
 
@@ -106,4 +107,68 @@ TEST(BacktestReportTest, CsvEscapeQuotesOnlyWhenNeeded) {
     EXPECT_EQ(csvEscape("SIM"), "SIM");
     EXPECT_EQ(csvEscape("SIM,AAPL"), "\"SIM,AAPL\"");
     EXPECT_EQ(csvEscape("quote\"inside"), "\"quote\"\"inside\"");
+}
+
+TEST(BacktestReportTest, RunOverridesParseLabRequestShape) {
+    ServerOptions options;
+
+    const nlohmann::json request{
+        {"symbol", "SIM,AAPL"},
+        {"seed", 123},
+        {"durationMs", 15000},
+        {"volatility", "high"},
+        {"mmCount", 4},
+        {"momCount", 3},
+        {"mrCount", 2},
+        {"noiseCount", 1},
+        {"marketMaker", {
+            {"levels", 5},
+            {"quoteQuantity", 120},
+            {"baseSpreadTicks", 6},
+            {"inventorySkewDivisor", 80}
+        }}
+    };
+
+    applyRunOverrides(options, request, true);
+
+    EXPECT_EQ(options.symbols.size(), 2u);
+    EXPECT_EQ(options.symbols.front(), "SIM");
+    EXPECT_EQ(options.simulation.clockMode, SimulationClockMode::Instant);
+    EXPECT_EQ(options.simulation.seed, 123u);
+    EXPECT_EQ(options.simulation.headlessDurationMs, 15000u);
+    EXPECT_EQ(options.simulation.marketMakerCount, 4u);
+    EXPECT_EQ(options.simulation.marketMaker.levels, 5u);
+    EXPECT_EQ(options.simulation.marketMaker.inventorySkewDivisor, 80);
+}
+
+TEST(BacktestReportTest, LabResultJsonIncludesRenderableArtifacts) {
+    BacktestRunResult result;
+    result.summary.name = "lab";
+    result.summary.tradeCount = 1;
+    result.summary.agents.push_back(AgentAttributionSummary{
+        "SIM", 1000, "PassiveMarketMaker", "market_maker"
+    });
+    result.calibration = nullptr;
+
+    TradeEvent trade;
+    trade.sequence = 10;
+    trade.symbol = "SIM";
+    trade.tradeId = 4;
+    trade.price = 101;
+    trade.quantity = 7;
+    result.events.trades.push_back(trade);
+
+    StatsEvent stats;
+    stats.sequence = 11;
+    stats.symbol = "SIM";
+    stats.midPrice = 101;
+    stats.spread = 2;
+    result.events.stats.push_back(stats);
+
+    const auto json = backtestRunResultToJson(result);
+
+    EXPECT_EQ(json.at("summary").at("name"), "lab");
+    EXPECT_EQ(json.at("artifacts").at("trades").at(0).at("price").get<int64_t>(), 101);
+    EXPECT_EQ(json.at("artifacts").at("stats").at(0).at("midPrice").get<int64_t>(), 101);
+    EXPECT_EQ(json.at("artifacts").at("agentSummary").at(0).at("agentType"), "market_maker");
 }

@@ -160,6 +160,7 @@ Backtest reporting:
 
 - `--backtest-output <dir>` records `summary.json`, `config.json`, `trades.csv`, `stats.csv`, `pnl.csv`, `sim_state.csv`, `agent_metrics.csv`, and `agent_summary.csv`
 - `include/BacktestReport.h` owns the derived run metrics, queue analytics, agent attribution, and artifact writers
+- `include/BacktestRunner.h` and `src/BacktestRunner.cpp` own the shared CLI/server execution path for single backtests, headless runs, sweeps, artifact writing, and replay calibration
 - report metrics include effective speed, trade count, volume, final mid, realized volatility, average spread, max drawdown, final regime, toxicity, total P&L, fill quality, queue position, quantity ahead, and adverse-selection estimates
 - `--sweep <file>` reads a JSON array or `{ "runs": [...] }`, applies per-run simulation overrides, forces instant clock mode, and writes per-run artifacts plus `sweep_summary.json` and `sweep_summary.csv` when an output directory is supplied
 - `--scenario <file>` applies the same JSON override shape to a single live, headless, or backtest run
@@ -274,7 +275,7 @@ Responsibilities:
 - own `PnLTracker` instances for each symbol
 - own the monotonically increasing outbound `sequence`
 - serialize all mutations across all symbols on one dedicated engine thread
-- produce L2 snapshots, deltas, trades, executions, stats, and PnL events on that engine thread
+- produce L2 snapshots, deltas, trades, executions, stats, fill PnL, and live mark-to-market PnL events on that engine thread
 
 Design constraints:
 
@@ -341,6 +342,8 @@ HTTP endpoints:
 - `GET /api/scenarios`
 - `POST /api/orders`
 - `POST /api/simulation/control`
+- `POST /api/replay/control`
+- `POST /api/lab/run`
 
 WebSocket endpoints:
 
@@ -351,6 +354,8 @@ Current behavior:
 
 - binds to `127.0.0.1` by default
 - accepts browser order entry over HTTP only
+- accepts live simulator timing, replay, scenario, agent, and market-maker controls over HTTP
+- accepts offline lab runs over HTTP for instant/headless backtests, parameter sweeps, and replay calibration, returning the same summary/artifact shape used by saved run files
 - keeps WebSocket read-only except for subscribe messages that request depth
 - JSON path sends one `snapshot` on connect and then live runtime events
 - binary path sends only `book_delta` and `trade` as packed structs
@@ -404,7 +409,7 @@ UI layout:
 - Left column: order entry form, PnL card, simulation controls with volatility/regime/scenario/agent-count/market-maker controls, system health card
 - Center column: mid-price chart above, L2 order book ladder below
 - Right column: scrolling trade tape with uptick/downtick and self-trade highlighting
-- Lab view: file-imported backtest artifacts with P&L, inventory, mid/spread, toxicity, queue metrics, and agent attribution
+- Lab view: direct `/api/lab/run` execution for instant/headless backtests, sweeps, and replay calibration, plus file-imported artifacts with P&L, inventory, mid/spread, toxicity, queue metrics, and agent attribution
 - Status Bar: WS state, active client, trade count, volume, bid/ask levels, timezone, version
 
 Client behavior:
@@ -417,6 +422,7 @@ Client behavior:
 - `sim_state` updates drive the operator controls, regime/noise telemetry, and runtime status badges
 - `agent_metrics` updates drive the live attribution table
 - order entry uses `POST /api/orders` with an editable `clientId`
+- Lab view uses `POST /api/lab/run` for local offline runs and renders returned summary/artifacts without requiring file import
 - submitted order IDs are tracked so the trade tape can highlight the user's own fills
 - `engineLatencyNs` from `book_delta` and `trade` payloads feeds the System Health card
 - `messagesPerSecond` from `stats` payloads feeds the System Health card
@@ -433,7 +439,7 @@ The current v1 boundaries are intentional:
 - WebSocket for read-only market data
 - local JSON/CSV artifacts for backtests, sweeps, queue analytics, attribution, and replay calibration
 - separate Vite app for frontend development
-- browser remains a thin operator client rather than the owner of the market loop
+- browser remains an operator client: it can start local server-owned lab runs, but it does not own the market loop or matching state
 - C++ in-process custom agents only; Python strategy loading and external strategy sandboxes are deferred
 - no authentication, multi-user permissions, hosted deployment, or durable database layer in v1
 
@@ -471,7 +477,7 @@ For market-runtime or dashboard changes, treat both backend and frontend tests a
 `tests/backtest_report_test.cpp` covers:
 
 - derived backtest metrics such as effective speed, min/max mid, max drawdown, final regime, final toxicity, queue analytics, and final P&L
-- JSON summary shape for agent counts and per-agent attribution
+- JSON summary shape for agent counts, per-agent attribution, and Lab API renderable artifacts
 - CSV escaping used by report artifact writers
 
 `tests/regime_manager_test.cpp` covers:

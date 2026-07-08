@@ -179,6 +179,7 @@ set(MERCURY_CORE_SOURCES
     src/EngineService.cpp
     src/MarketRuntime.cpp
     src/RegimeManager.cpp
+    src/BacktestRunner.cpp
 )
 
 # Add the main executable
@@ -209,6 +210,7 @@ add_library(mercury_lib
 )
 target_include_directories(mercury_lib PUBLIC include)
 target_link_libraries(mercury_lib PUBLIC Threads::Threads)
+target_link_libraries(mercury_lib PUBLIC nlohmann_json::nlohmann_json)
 target_link_libraries(mercury_lib PUBLIC absl::flat_hash_map absl::btree)
 
 # Header-only components (listed for IDE visibility)
@@ -232,6 +234,7 @@ set(MERCURY_HEADERS
     include/MomentumStrategy.h
     include/StrategyManager.h
     include/BacktestReport.h
+    include/BacktestRunner.h
     include/MarketData.h
     include/MarketDataPublisher.h
     include/MarketRuntime.h

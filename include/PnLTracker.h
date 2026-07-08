@@ -183,6 +183,12 @@ namespace Mercury {
         void updateAllMarkToMarket(int64_t markPrice);
 
         /**
+         * Mark all clients to market and emit P&L callbacks for live consumers.
+         * @param markPrice Current market price
+         */
+        void publishMarkToMarket(int64_t markPrice);
+
+        /**
          * Get P&L record for a client
          * @param clientId The client ID
          * @return Client P&L record

@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { formatPrice } from '../lib/format'
-import { useActiveBucket } from '../store/market-data-store'
+import { useActiveBucket, useActiveSymbol } from '../store/market-data-store'
 import { Card, CardBody, CardHeader } from './ui/card'
 
 function Row({
@@ -23,7 +23,7 @@ function Row({
   const bgColor = side === 'buy' ? 'var(--color-buy-dim)' : 'var(--color-sell-dim)'
 
   return (
-    <div className="group relative grid grid-cols-[1fr_1fr_1fr_0.6fr] items-center px-2 py-[2px] text-[12px] hover:bg-[color:var(--color-bg-row-hover)]">
+    <div className="terminal-row group relative grid grid-cols-[1fr_1fr_1fr_0.6fr] items-center px-2 py-[2px] text-[12px]">
       <div
         className="absolute inset-y-0 right-0 transition-[width] duration-150"
         style={{ width: `${widthPct}%`, background: bgColor }}
@@ -44,7 +44,7 @@ function Row({
 
 function Header() {
   return (
-    <div className="grid grid-cols-[1fr_1fr_1fr_0.6fr] border-b border-[color:var(--color-border-subtle)] px-2 py-1 text-[9.5px] font-semibold uppercase tracking-wider text-[color:var(--color-text-muted)]">
+    <div className="terminal-table-head grid grid-cols-[1fr_1fr_1fr_0.6fr] border-b border-[color:var(--color-border-subtle)] px-2 py-1 text-[9.5px] font-bold uppercase">
       <span>Price</span>
       <span className="text-right">Size</span>
       <span className="text-right">Sum</span>
@@ -58,6 +58,7 @@ export function OrderBookLadder() {
   const asks = bucket.asks
   const bids = bucket.bids
   const stats = bucket.stats
+  const activeSymbol = useActiveSymbol()
 
   const maxQuantity = useMemo(() => {
     let max = 0
@@ -87,13 +88,13 @@ export function OrderBookLadder() {
   const spread = stats?.spread ?? 0
 
   return (
-    <Card>
+    <Card className="terminal-grid">
       <CardHeader
-        title="Order Book"
-        subtitle="L2 Depth"
+        title={`Order Book | ${activeSymbol}`}
+        subtitle="L2"
         actions={
           <span className="num text-[10.5px] text-[color:var(--color-text-muted)]">
-            {asks.length}A · {bids.length}B
+            {asks.length}A / {bids.length}B
           </span>
         }
       />
@@ -123,14 +124,14 @@ export function OrderBookLadder() {
           </div>
 
           {/* Spread marker */}
-          <div className="flex items-center justify-between border-y border-[color:var(--color-border-subtle)] bg-[color:var(--color-bg-header)] px-2 py-1 text-[11px]">
-            <span className="num font-semibold text-[color:var(--color-text-primary)]">
+          <div className="flex items-center justify-between border-y border-[color:var(--color-border-strong)] bg-black px-2 py-1 text-[11px]">
+            <span className="num font-bold text-[color:var(--color-text-primary)]">
               {formatPrice(mid)}
             </span>
-            <span className="text-[9.5px] uppercase tracking-wider text-[color:var(--color-text-muted)]">
+            <span className="text-[9.5px] uppercase text-[color:var(--color-accent)]">
               Spread
             </span>
-            <span className="num text-[color:var(--color-warn)]">{formatPrice(spread)}</span>
+            <span className="num font-bold text-[color:var(--color-warn)]">{formatPrice(spread)}</span>
           </div>
 
           {/* Bids (bottom, best-first) */}

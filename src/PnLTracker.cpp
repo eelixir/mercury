@@ -274,6 +274,21 @@ namespace Mercury {
         }
     }
 
+    void PnLTracker::publishMarkToMarket(int64_t markPrice) {
+        if (markPrice <= 0) {
+            return;
+        }
+
+        updateAllMarkToMarket(markPrice);
+
+        for (const auto& [clientId, pnl] : clientPnL_) {
+            (void) pnl;
+            PnLSnapshot snapshot = createSnapshot(clientId, markPrice, 0);
+            writeSnapshot(snapshot);
+            notifyPnLUpdate(snapshot);
+        }
+    }
+
     PnLSnapshot PnLTracker::createSnapshot(uint64_t clientId, int64_t markPrice, uint64_t tradeId) {
         const ClientPnL& pnl = getClientPnL(clientId);
         

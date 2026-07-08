@@ -66,6 +66,7 @@ export interface PnLPayload {
 }
 
 export interface SimulationStatePayload {
+  symbols?: string[]
   enabled: boolean
   running: boolean
   paused: boolean

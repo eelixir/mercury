@@ -29,7 +29,7 @@ function SymbolSelector() {
   if (symbols.length <= 1) {
     return (
       <span className="text-[12px] font-semibold text-[color:var(--color-text-primary)]">
-        {activeSymbol || '—'}
+        {activeSymbol || '--'}
       </span>
     )
   }
@@ -38,7 +38,7 @@ function SymbolSelector() {
     <select
       value={activeSymbol}
       onChange={(event) => setActiveSymbol(event.target.value)}
-      className="h-6 rounded-sm border border-[color:var(--color-border-subtle)] bg-[color:var(--color-bg-panel-alt)] px-1.5 text-[12px] font-semibold text-[color:var(--color-text-primary)] outline-none focus:border-[color:var(--color-accent)]"
+      className="h-5 border border-[color:var(--color-border-strong)] bg-black px-1.5 text-[10.5px] font-bold text-[color:var(--color-text-primary)] outline-none focus:border-[color:var(--color-accent)]"
       aria-label="Active symbol"
     >
       {symbols.map((symbol) => (
@@ -63,34 +63,27 @@ export function TopBar() {
   const connTone = connection === 'connected' ? 'live' : connection === 'connecting' ? 'warn' : 'sell'
 
   return (
-    <header className="flex items-center justify-between gap-4 border-b border-[color:var(--color-border-subtle)] bg-[color:var(--color-bg-panel)] px-3 py-1.5">
-      <div className="flex items-center gap-4">
-        <div className="flex items-center gap-2">
-          <div className="flex h-5 w-5 items-center justify-center rounded-sm bg-[color:var(--color-accent)] text-[10px] font-bold text-white">
-            M
-          </div>
-          <span className="text-[13px] font-semibold tracking-tight text-[color:var(--color-text-primary)]">
-            Mercury
-          </span>
-          <span className="text-[10px] uppercase tracking-wider text-[color:var(--color-text-muted)]">
-            Terminal
-          </span>
-        </div>
-
-        <div className="h-4 w-px bg-[color:var(--color-border-subtle)]" />
-
-        <div className="flex items-center gap-3">
+    <header className="flex min-h-5 items-center justify-between gap-4 border-b border-[color:var(--color-border-subtle)] bg-black px-1.5 py-[2px]">
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="text-[10px] font-bold text-[color:var(--color-text-primary)]">
+          MERCURY
+        </span>
+        <span className="hidden text-[10px] text-[color:var(--color-border-strong)] sm:inline">|</span>
+        <div className="flex min-w-0 items-center gap-1.5">
           <SymbolSelector />
-          <span className="num text-[12px] text-[color:var(--color-text-primary)]">
+          <span className="num text-[10.5px] font-bold text-[color:var(--color-text-primary)]">
             {formatPrice(mid)}
           </span>
-          <span className="num text-[11px] text-[color:var(--color-text-secondary)]">
-            spr {formatPrice(spread)}
+          <span className="num text-[10.5px] text-[color:var(--color-warn)]">
+            SPR {formatPrice(spread)}
           </span>
         </div>
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex shrink-0 items-center gap-2">
+        <span className="num text-[10px] text-[color:var(--color-text-secondary)]">
+          {formatClock(now)}
+        </span>
         <Badge tone={connTone} dot>
           {connection}
         </Badge>
@@ -99,9 +92,6 @@ export function TopBar() {
             sim {simulation.paused ? 'paused' : simulation.volatility}
           </Badge>
         ) : null}
-        <span className="num text-[11px] text-[color:var(--color-text-secondary)]">
-          {formatClock(now)}
-        </span>
       </div>
     </header>
   )

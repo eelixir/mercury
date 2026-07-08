@@ -11,11 +11,11 @@ function signClass(value: number | undefined | null) {
 
 function Row({ label, value, valueClass }: { label: string; value: string; valueClass?: string }) {
   return (
-    <div className="flex items-baseline justify-between border-b border-[color:var(--color-border-subtle)] px-2 py-1 last:border-b-0">
-      <span className="text-[10.5px] uppercase tracking-wider text-[color:var(--color-text-muted)]">
+    <div className="terminal-row flex items-baseline justify-between px-2 py-1 last:border-b-0">
+      <span className="text-[10.5px] uppercase text-[color:var(--color-text-muted)]">
         {label}
       </span>
-      <span className={`num text-[13px] font-semibold ${valueClass ?? 'text-[color:var(--color-text-primary)]'}`}>
+      <span className={`num text-[13px] font-bold ${valueClass ?? 'text-[color:var(--color-text-primary)]'}`}>
         {value}
       </span>
     </div>
@@ -32,8 +32,8 @@ export function PnLCard() {
   return (
     <Card>
       <CardHeader
-        title="Position / PnL"
-        subtitle={`#${activeClientId}`}
+        title="Positions"
+        subtitle={`client ${activeClientId}`}
         actions={
           <span
             className={`num text-[12px] font-semibold ${signClass(total)}`}

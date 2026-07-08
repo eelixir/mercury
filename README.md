@@ -12,7 +12,7 @@ The intended use case is experimentation: compare liquidity-provision settings, 
 - **3.2M+ orders/sec** sustained throughput
 - **~320 ns** average order insertion latency
 - **O(1)** order lookup, insertion, and cancellation
-- **244** backend tests, all passing
+- **247** backend tests, all passing
 - **Nanosecond** gateway-to-engine latency instrumentation
 
 ## Features
@@ -24,6 +24,7 @@ The intended use case is experimentation: compare liquidity-provision settings, 
 - **Risk Management:** Pre-trade risk checks with position/exposure limits
 - **P&L Tracking:** Realized and unrealized P&L with FIFO cost basis
 - **Unified Market Runtime:** One runtime for manual orders, replay, built-in agents, instant backtests, and live real-time simulation
+- **Browser Lab Runner:** Start instant backtests, headless runs, sweeps, and replay calibration from the Lab tab or `/api/lab/run`
 - **Backtest Artifacts:** Local JSON/CSV output for run summary, config, trades, stats, P&L, simulation state, agent attribution, and queue analytics
 - **Parameter Sweeps:** JSON-driven batch runner for comparing market-maker counts, volatility presets, seeds, flow mixes, P&L, drawdown, and fill quality
 - **Scenario Presets:** Versioned JSON scenarios for calm books, toxic flow, thin-book stress, high-cancel churn, and momentum bursts
@@ -108,11 +109,11 @@ The React frontend (`/frontend`) provides a real-time market-operations interfac
 | **Top Bar** | Symbol, mid-price, spread, connection badge, runtime status |
 | **Stats Strip** | Bid, ask, mid, spread, trades, volume, orders, levels |
 | **Order Entry** | Limit/market/cancel/modify with buy/sell toggle, price, qty, TIF |
-| **PnL Card** | Net position, total/realized/unrealized P&L |
-| **Simulation Controls** | Pause/resume, restart, volatility/regime, scenarios, agent counts, market-maker tuning |
-| **Lab View** | Import backtest artifacts and inspect P&L, inventory, mid/spread, toxicity, queue metrics, and agent attribution |
+| **PnL Card** | Net position plus total/realized/unrealized P&L marked live to the current mid |
+| **Simulation Controls** | Pause/resume, restart, clock speed, replay, volatility/regime, scenarios, agent counts, market-maker tuning |
+| **Lab View** | Run instant/headless backtests, sweeps, and replay calibration, or import saved artifacts for P&L, inventory, mid/spread, toxicity, queue metrics, and agent attribution |
 | **System Health** | Engine latency, throughput, connection state |
-| **Mid-Price Chart** | Lightweight-charts line view of recent mid-price evolution |
+| **Mid-Price Chart** | Lightweight-charts 1s candlestick view with zoom/pan |
 | **Order Book Ladder** | L2 depth, asks above and bids below |
 | **Trade Tape** | Time and sales with self-trade highlighting |
 | **Status Bar** | WS state, active client, trade count, volume, levels, timezone |
@@ -129,6 +130,7 @@ mercury/
 |   |-- MarketRuntime.h         # Unified simulation/runtime layer
 |   |-- MarketData.h            # Market-data DTOs and sink interfaces
 |   |-- BacktestReport.h        # Backtest summary and artifact writers
+|   |-- BacktestRunner.h        # Shared CLI/server lab runner
 |   |-- MarketDataPublisher.h   # JSON + binary WebSocket publisher
 |   |-- OrderEntryGateway.h     # HTTP order entry handler
 |   |-- BinaryProtocol.h        # Packed binary wire-format structs
@@ -138,12 +140,13 @@ mercury/
 |   |-- MatchingEngine.cpp
 |   |-- EngineService.cpp
 |   |-- MarketRuntime.cpp
+|   |-- BacktestRunner.cpp
 |   |-- OrderEntryGateway.cpp
 |   |-- MarketDataPublisher.cpp
 |   |-- ServerApp.cpp
 |   `-- main.cpp
 |-- scenarios/                  # Versioned market-making lab scenarios
-|-- tests/                      # Google Test suites (244 tests)
+|-- tests/                      # Google Test suites (247 tests)
 |-- benchmarks/                 # Optional benchmark target
 |-- frontend/                   # React/Vite/TypeScript dashboard
 |-- data/                       # Sample CSV inputs
@@ -166,7 +169,7 @@ The backend pulls third-party dependencies with CMake `FetchContent`, including 
 
 Terminal 1 - backend:
 ```powershell
-.\build\mercury.exe --server --sim --host 127.0.0.1 --port 9001 --symbol SIM,AAPL,GOOG
+.\build\mercury.exe --server --sim --host 127.0.0.1 --port 9001 --symbol SIM
 ```
 
 Terminal 2 - frontend:
@@ -243,7 +246,9 @@ Run the sweep as instant backtests:
 | `/api/state` | GET | Engine metadata, market summary, and simulation state |
 | `/api/scenarios` | GET | Built-in live scenario IDs and display names |
 | `/api/orders` | POST | Submit order (limit, market, cancel, modify) |
-| `/api/simulation/control` | POST | Pause/resume/restart, change volatility/regime, apply scenarios, tune agent counts, tune market-maker quoting |
+| `/api/simulation/control` | POST | Pause/resume/restart, change timing, volatility/regime, scenarios, agent counts, market-maker quoting |
+| `/api/replay/control` | POST | Start or stop local CSV replay against the running simulator |
+| `/api/lab/run` | POST | Run instant/headless backtests, sweeps, or replay calibration and return renderable artifacts |
 
 Example order submission:
 
@@ -267,6 +272,16 @@ Simulation control example:
 }
 ```
 
+Accelerate or return the live simulator clock to realtime:
+
+```json
+{
+  "action": "set_timing",
+  "clockMode": "accelerated",
+  "speed": 25
+}
+```
+
 Force a specific market regime (`calm`, `normal`, or `stressed`):
 
 ```json
@@ -275,6 +290,39 @@ Force a specific market regime (`calm`, `normal`, or `stressed`):
   "volatility": "stressed"
 }
 ```
+
+Start local replay flow from the browser or API:
+
+```json
+{
+  "action": "start",
+  "replayFile": "data\\sample_orders_with_clients.csv",
+  "speed": 10,
+  "loop": false,
+  "loopPauseMs": 1000
+}
+```
+
+Run an instant lab backtest from the browser or API:
+
+```json
+{
+  "mode": "backtest",
+  "name": "ui-baseline",
+  "symbol": "SIM",
+  "scenarioFile": "scenarios\\calm-two-sided-market.json",
+  "durationMs": 30000,
+  "seed": 42,
+  "volatility": "normal",
+  "marketMakerCount": 2,
+  "momentumCount": 2,
+  "meanReversionCount": 2,
+  "noiseTraderCount": 1,
+  "outputDir": "runs\\ui-baseline"
+}
+```
+
+`mode` can be `backtest`, `headless`, `sweep`, or `calibrate_replay`. The response includes summary JSON and chart/table-ready artifacts; when `outputDir` is supplied, the normal local JSON/CSV files are written as well.
 
 Apply a built-in live scenario:
 
@@ -414,7 +462,7 @@ cmake --build build
 
 ## Testing
 
-244 unit tests covering:
+247 unit tests covering:
 - Order book operations (insert, remove, update)
 - Matching engine (limit, market, IOC, FOK)
 - Risk manager (position limits, exposure limits)
@@ -423,7 +471,7 @@ cmake --build build
 - Server/API contract smoke tests for state JSON, order parsing, order responses, and WebSocket envelopes
 - Unified simulation runtime and agent fanout
 - Instant backtest clock behavior without real-time pacing
-- Backtest report metrics, agent attribution, queue analytics, JSON shape, and CSV escaping
+- Backtest report metrics, agent attribution, queue analytics, Lab API JSON artifacts, and CSV escaping
 - Bounded volatility excursion and long-run two-sided book maintenance
 - Trading strategies and legacy migration coverage
 - Concurrency (thread pool, async writers)

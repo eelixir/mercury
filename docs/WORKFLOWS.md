@@ -44,9 +44,11 @@ Read first:
 - `include/BinaryProtocol.h`
 - `include/ServerHelpers.h`
 - `include/BacktestReport.h`
+- `include/BacktestRunner.h`
 - `src/MarketRuntime.cpp`
 - `src/EngineService.cpp`
 - `src/ServerApp.cpp`
+- `src/BacktestRunner.cpp`
 - `src/OrderEntryGateway.cpp`
 - `src/MarketDataPublisher.cpp`
 - `tests/market_data_test.cpp`
@@ -62,6 +64,8 @@ Required checks:
 - snapshot depth remains clamped to `1..100`
 - replay and HTTP orders still feed the same runtime path
 - simulation controls and runtime-state reporting stay aligned with backend behavior
+- live timing and replay controls stay aligned between `/api/simulation/control`, `/api/replay/control`, and the frontend operator panel
+- offline lab controls stay aligned between CLI backtest/sweep/calibration behavior, `/api/lab/run`, and the frontend Lab tab
 - instant backtests stay CPU-paced and do not block on real-time sleeps
 - `--backtest-output` artifacts stay parseable and aligned with emitted DTO fields
 - `--sweep` applies the same simulation knobs as the single-run CLI path
@@ -89,12 +93,14 @@ Recommended manual smoke test:
 3. Confirm the ladder and trade tape are active before any manual order is submitted.
 4. Submit a buy or sell order from the browser or with `POST /api/orders`.
 5. Confirm the ladder, trade tape, stats, simulation controls, PnL, and system health card update.
-6. Call `POST /api/simulation/control` with `pause`, `resume`, `set_volatility`, `set_regime`, `set_counts`, `set_market_maker`, or `apply_scenario` and confirm the UI changes.
-7. Confirm self-trade highlighting appears in the trade tape.
-8. Refresh the browser and confirm the UI resyncs from a fresh snapshot.
-9. Optionally connect a raw WebSocket client to `/ws/market/bin` and verify binary frames arrive.
-10. Optionally run `.\build\mercury.exe --backtest --scenario scenarios\toxic-flow.json --backtest-output .codex-run\toxic-flow` twice and compare summary output.
-11. When changing simulation dynamics, sample `GET /api/state` over a few intervals at `normal` and `high` volatility and confirm spreads and activity increase without 100% to 1000% price jumps over a few seconds.
+6. Call `POST /api/simulation/control` with `pause`, `resume`, `restart`, `set_timing`, `set_volatility`, `set_regime`, `set_counts`, `set_market_maker`, or `apply_scenario` and confirm the UI changes.
+7. Call `POST /api/replay/control` with `start` and `stop`, using `data\sample_orders_with_clients.csv`, and confirm replay state returns through `/api/health`.
+8. Run an instant backtest from the Lab tab or `POST /api/lab/run` and confirm returned artifacts populate summary charts/tables.
+9. Confirm self-trade highlighting appears in the trade tape.
+10. Refresh the browser and confirm the UI resyncs from a fresh snapshot.
+11. Optionally connect a raw WebSocket client to `/ws/market/bin` and verify binary frames arrive.
+12. Optionally run `.\build\mercury.exe --backtest --scenario scenarios\toxic-flow.json --backtest-output .codex-run\toxic-flow` twice and compare summary output.
+13. When changing simulation dynamics, sample `GET /api/state` over a few intervals at `normal` and `high` volatility and confirm spreads and activity increase without 100% to 1000% price jumps over a few seconds.
 
 ## 3. Changing Frontend Dashboard Behavior
 
@@ -181,19 +187,19 @@ ctest --test-dir build --output-on-failure
 ### Run Backend Server
 
 ```powershell
-.\build\mercury.exe --server --sim --host 127.0.0.1 --port 9001 --symbol SIM,AAPL,GOOG
+.\build\mercury.exe --server --sim --host 127.0.0.1 --port 9001 --symbol SIM
 ```
 
 ### Run Backend Server With Replay
 
 ```powershell
-.\build\mercury.exe --server --sim --host 127.0.0.1 --port 9001 --symbol SIM,AAPL,GOOG --replay data\sample_orders_with_clients.csv --replay-speed 10
+.\build\mercury.exe --server --sim --host 127.0.0.1 --port 9001 --symbol SIM --replay data\sample_orders_with_clients.csv --replay-speed 10
 ```
 
 Loop the replay continuously:
 
 ```powershell
-.\build\mercury.exe --server --sim --host 127.0.0.1 --port 9001 --symbol SIM,AAPL,GOOG --replay data\sample_orders_with_clients.csv --replay-speed 10 --replay-loop --replay-loop-pause 1000
+.\build\mercury.exe --server --sim --host 127.0.0.1 --port 9001 --symbol SIM --replay data\sample_orders_with_clients.csv --replay-speed 10 --replay-loop --replay-loop-pause 1000
 ```
 
 ### Run Headless Simulation
@@ -311,6 +317,42 @@ Invoke-RestMethod `
   -Uri http://127.0.0.1:9001/api/simulation/control `
   -ContentType "application/json" `
   -Body '{"action":"set_regime","volatility":"stressed"}'
+```
+
+Change live timing:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri http://127.0.0.1:9001/api/simulation/control `
+  -ContentType "application/json" `
+  -Body '{"action":"set_timing","clockMode":"accelerated","speed":25}'
+```
+
+Start and stop replay:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri http://127.0.0.1:9001/api/replay/control `
+  -ContentType "application/json" `
+  -Body '{"action":"start","replayFile":"data\\sample_orders_with_clients.csv","speed":10,"loop":false,"loopPauseMs":1000}'
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri http://127.0.0.1:9001/api/replay/control `
+  -ContentType "application/json" `
+  -Body '{"action":"stop"}'
+```
+
+Run an instant lab backtest over HTTP:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri http://127.0.0.1:9001/api/lab/run `
+  -ContentType "application/json" `
+  -Body '{"mode":"backtest","name":"api-smoke","symbol":"SIM","scenarioFile":"scenarios\\calm-two-sided-market.json","durationMs":1000,"seed":42,"volatility":"normal","marketMakerCount":2,"momentumCount":1,"meanReversionCount":1,"noiseTraderCount":1,"outputDir":".codex-run\\api-smoke"}'
 ```
 
 ## 7. Practical Review Checklist

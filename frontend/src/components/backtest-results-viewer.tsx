@@ -1,7 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type FormEvent } from 'react'
+import { Button } from './ui/button'
 import { Card, CardBody, CardHeader } from './ui/card'
 
-type CsvRow = Record<string, string>
+type CellValue = string | number | boolean | null | undefined
+type CsvRow = Record<string, CellValue>
+type LabMode = 'backtest' | 'headless' | 'sweep' | 'calibrate_replay'
 
 interface LoadedArtifacts {
   summary: Record<string, unknown> | null
@@ -11,6 +14,18 @@ interface LoadedArtifacts {
   simState: CsvRow[]
   agentSummary: CsvRow[]
   sweepSummary: CsvRow[]
+  calibration: Record<string, unknown> | null
+}
+
+interface LabRunResponse {
+  status: string
+  mode: LabMode
+  outputDir?: string
+  summary?: Record<string, unknown>
+  summaries?: Array<Record<string, unknown>>
+  artifacts?: Partial<Pick<LoadedArtifacts, 'stats' | 'pnl' | 'trades' | 'simState' | 'agentSummary'>>
+  sweepSummary?: CsvRow[]
+  calibration?: Record<string, unknown> | null
 }
 
 const EMPTY: LoadedArtifacts = {
@@ -21,6 +36,7 @@ const EMPTY: LoadedArtifacts = {
   simState: [],
   agentSummary: [],
   sweepSummary: [],
+  calibration: null,
 }
 
 function parseCsv(text: string): CsvRow[] {
@@ -73,6 +89,11 @@ function metric(summary: Record<string, unknown> | null, key: string): number {
   return toNumber(summary?.[key])
 }
 
+function nestedNumber(source: Record<string, unknown> | null, group: string, key: string): number {
+  const record = (source?.[group] ?? {}) as Record<string, unknown>
+  return toNumber(record[key])
+}
+
 function makeSeries(rows: CsvRow[], xKey: string, yKey: string) {
   return rows
     .map((row) => ({ x: toNumber(row[xKey]), y: toNumber(row[yKey]) }))
@@ -80,9 +101,48 @@ function makeSeries(rows: CsvRow[], xKey: string, yKey: string) {
     .slice(-180)
 }
 
+function formString(form: FormData, key: string): string {
+  return String(form.get(key) ?? '').trim()
+}
+
+function formNumber(form: FormData, key: string): number {
+  return Number(form.get(key) ?? 0)
+}
+
+function withOptionalString(payload: Record<string, unknown>, key: string, value: string) {
+  if (value.length > 0) {
+    payload[key] = value
+  }
+}
+
+function artifactsFromLabResponse(payload: LabRunResponse): LoadedArtifacts {
+  if (payload.mode === 'sweep') {
+    return {
+      ...EMPTY,
+      summary: payload.summaries?.[0] ?? null,
+      sweepSummary: payload.sweepSummary ?? [],
+    }
+  }
+
+  return {
+    ...EMPTY,
+    summary: payload.summary ?? null,
+    stats: payload.artifacts?.stats ?? [],
+    pnl: payload.artifacts?.pnl ?? [],
+    trades: payload.artifacts?.trades ?? [],
+    simState: payload.artifacts?.simState ?? [],
+    agentSummary: payload.artifacts?.agentSummary ?? [],
+    calibration: payload.calibration ?? null,
+  }
+}
+
 export function BacktestResultsViewer() {
   const [artifacts, setArtifacts] = useState<LoadedArtifacts>(EMPTY)
   const [loadedNames, setLoadedNames] = useState<string[]>([])
+  const [mode, setMode] = useState<LabMode>('backtest')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   const pnlSeries = useMemo(() => makeSeries(artifacts.pnl, 'timestamp', 'totalPnL'), [artifacts.pnl])
   const inventorySeries = useMemo(() => makeSeries(artifacts.pnl, 'timestamp', 'netPosition'), [artifacts.pnl])
@@ -103,6 +163,8 @@ export function BacktestResultsViewer() {
       names.push(file.name)
       if (file.name === 'summary.json') {
         next.summary = JSON.parse(text) as Record<string, unknown>
+      } else if (file.name === 'calibration.json') {
+        next.calibration = JSON.parse(text) as Record<string, unknown>
       } else if (file.name === 'stats.csv') {
         next.stats = parseCsv(text)
       } else if (file.name === 'pnl.csv') {
@@ -120,14 +182,155 @@ export function BacktestResultsViewer() {
 
     setArtifacts(next)
     setLoadedNames(names.sort())
+    setMessage('artifacts loaded')
+    setError(null)
+  }
+
+  async function runLab(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    const requestedMode = formString(form, 'mode') as LabMode
+    const payload: Record<string, unknown> = {
+      mode: requestedMode,
+      name: formString(form, 'name') || requestedMode,
+      symbol: formString(form, 'symbol') || 'SIM',
+      seed: formNumber(form, 'seed'),
+      durationMs: formNumber(form, 'durationMs'),
+      volatility: formString(form, 'volatility') || 'normal',
+      marketMakerCount: formNumber(form, 'marketMakerCount'),
+      momentumCount: formNumber(form, 'momentumCount'),
+      meanReversionCount: formNumber(form, 'meanReversionCount'),
+      noiseTraderCount: formNumber(form, 'noiseTraderCount'),
+      replaySpeed: formNumber(form, 'replaySpeed'),
+    }
+
+    withOptionalString(payload, 'outputDir', formString(form, 'outputDir'))
+    withOptionalString(payload, 'scenarioFile', formString(form, 'scenarioFile'))
+    withOptionalString(payload, 'marketMakerConfigFile', formString(form, 'marketMakerConfigFile'))
+    withOptionalString(payload, 'replayFile', formString(form, 'replayFile'))
+    withOptionalString(payload, 'sweepFile', formString(form, 'sweepFile'))
+
+    setBusy(true)
+    setError(null)
+    setMessage(null)
+
+    try {
+      const response = await fetch('/api/lab/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const text = await response.text()
+      if (!response.ok) {
+        throw new Error(text || `HTTP ${response.status}`)
+      }
+
+      const result = JSON.parse(text) as LabRunResponse
+      setArtifacts(artifactsFromLabResponse(result))
+      setLoadedNames([
+        `api:${result.mode}`,
+        result.outputDir ? `output:${result.outputDir}` : 'output:memory',
+      ])
+      setMessage(result.outputDir ? `run complete: ${result.outputDir}` : 'run complete')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Lab run failed')
+    } finally {
+      setBusy(false)
+    }
   }
 
   const summary = artifacts.summary
   const queue = (summary?.queueAnalytics ?? {}) as Record<string, unknown>
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-1 gap-1.5 p-1.5 xl:grid-cols-[22rem_minmax(0,1fr)]">
-      <div className="flex min-h-0 flex-col gap-1.5">
+    <div className="grid h-full min-h-0 grid-cols-1 gap-1 p-1 xl:grid-cols-[23rem_minmax(0,1fr)]">
+      <div className="flex min-h-0 flex-col gap-1 overflow-y-auto pr-1">
+        <Card>
+          <CardHeader title="Lab Runner" subtitle={busy ? 'running' : 'offline'} />
+          <CardBody>
+            <form className="space-y-3" onSubmit={runLab}>
+              <div className="grid grid-cols-2 gap-2">
+                <SelectField
+                  label="Mode"
+                  name="mode"
+                  value={mode}
+                  onChange={(value) => setMode(value as LabMode)}
+                  options={[
+                    ['backtest', 'Instant'],
+                    ['headless', 'Headless'],
+                    ['sweep', 'Sweep'],
+                    ['calibrate_replay', 'Calibration'],
+                  ]}
+                />
+                <TextField label="Name" name="name" defaultValue="ui-backtest" />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <TextField label="Symbol" name="symbol" defaultValue="SIM" />
+                <TextField label="Output" name="outputDir" defaultValue="runs\\ui-lab" />
+              </div>
+
+              <TextField
+                label="Scenario"
+                name="scenarioFile"
+                defaultValue="scenarios\\calm-two-sided-market.json"
+              />
+              <TextField label="MM config" name="marketMakerConfigFile" placeholder="optional json" />
+
+              <div className="grid grid-cols-3 gap-2">
+                <NumberField label="Duration" name="durationMs" defaultValue={30000} min={1000} step={1000} />
+                <NumberField label="Seed" name="seed" defaultValue={42} min={0} />
+                <SelectField
+                  label="Vol"
+                  name="volatility"
+                  defaultValue="normal"
+                  options={[
+                    ['low', 'Low'],
+                    ['normal', 'Normal'],
+                    ['high', 'High'],
+                  ]}
+                />
+              </div>
+
+              <div className="grid grid-cols-4 gap-1.5">
+                <NumberField label="MM" name="marketMakerCount" defaultValue={2} />
+                <NumberField label="Mom" name="momentumCount" defaultValue={2} />
+                <NumberField label="MR" name="meanReversionCount" defaultValue={2} />
+                <NumberField label="Noise" name="noiseTraderCount" defaultValue={1} />
+              </div>
+
+              {mode === 'sweep' ? (
+                <TextField label="Sweep file" name="sweepFile" defaultValue="runs\\sweep.json" />
+              ) : (
+                <div className="grid grid-cols-[minmax(0,1fr)_6rem] gap-2">
+                  <TextField
+                    key={mode}
+                    label={mode === 'calibrate_replay' ? 'Replay CSV' : 'Replay CSV'}
+                    name="replayFile"
+                    defaultValue={mode === 'calibrate_replay' ? 'data\\sample_orders_with_clients.csv' : ''}
+                    placeholder="optional csv"
+                  />
+                  <NumberField label="Replay x" name="replaySpeed" defaultValue={10} min={0.1} step={1} />
+                </div>
+              )}
+
+              {error ? (
+                <div className="rounded-sm border border-[color:var(--color-sell)] bg-[color:var(--color-sell-dim)] px-2 py-1.5 text-[11px] text-[color:var(--color-sell)]">
+                  {error}
+                </div>
+              ) : message ? (
+                <div className="rounded-sm border border-[color:var(--color-border-subtle)] bg-[color:var(--color-bg-panel-alt)] px-2 py-1.5 text-[11px] text-[color:var(--color-text-secondary)]">
+                  {message}
+                </div>
+              ) : null}
+
+              <Button className="w-full" variant="default" disabled={busy} type="submit">
+                {busy ? 'Running...' : 'Run Lab Job'}
+              </Button>
+            </form>
+          </CardBody>
+        </Card>
+
         <Card>
           <CardHeader title="Backtest Artifacts" subtitle="Import" />
           <CardBody>
@@ -139,7 +342,7 @@ export function BacktestResultsViewer() {
                 accept=".json,.csv"
                 onChange={(event) => loadFiles(event.target.files)}
               />
-              <div className="max-h-24 overflow-auto rounded-sm bg-[color:var(--color-bg-panel-alt)] p-2 text-[11px] text-[color:var(--color-text-muted)]">
+              <div className="max-h-24 overflow-auto border border-[color:var(--color-border-subtle)] bg-black p-2 text-[11px] text-[color:var(--color-text-muted)]">
                 {loadedNames.length === 0 ? 'No files loaded' : loadedNames.join(', ')}
               </div>
             </div>
@@ -160,43 +363,47 @@ export function BacktestResultsViewer() {
           </CardBody>
         </Card>
 
+        {artifacts.calibration ? (
+          <Card>
+            <CardHeader title="Calibration" subtitle="Replay" />
+            <CardBody>
+              <div className="grid grid-cols-2 gap-2 text-[11px]">
+                <Metric label="Target orders" value={nestedNumber(artifacts.calibration, 'target', 'orderCount')} />
+                <Metric label="Observed trades" value={nestedNumber(artifacts.calibration, 'observed', 'tradeCount')} />
+                <Metric
+                  label="Volume ratio"
+                  value={nestedNumber(artifacts.calibration, 'comparison', 'volumeToReplayQuantity').toFixed(3)}
+                />
+                <Metric
+                  label="Cancel ratio"
+                  value={nestedNumber(artifacts.calibration, 'comparison', 'agentCancelToSubmitRatio').toFixed(3)}
+                />
+              </div>
+            </CardBody>
+          </Card>
+        ) : null}
+
         <Card className="min-h-0 flex-1">
-          <CardHeader title="Agents" subtitle={`${artifacts.agentSummary.length} rows`} />
+          <CardHeader
+            title={artifacts.sweepSummary.length > 0 ? 'Sweep Runs' : 'Agents'}
+            subtitle={`${artifacts.sweepSummary.length || artifacts.agentSummary.length} rows`}
+          />
           <CardBody flush>
-            <div className="h-full overflow-auto">
-              <table className="w-full text-[11px]">
-                <thead className="sticky top-0 bg-[color:var(--color-bg-header)] text-[color:var(--color-text-muted)]">
-                  <tr>
-                    <th className="px-2 py-1 text-left font-medium">Agent</th>
-                    <th className="px-2 py-1 text-right font-medium">PnL</th>
-                    <th className="px-2 py-1 text-right font-medium">Fill</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {artifacts.agentSummary.slice(0, 80).map((agent) => (
-                    <tr key={`${agent.symbol}-${agent.clientId}`} className="border-t border-[color:var(--color-border-subtle)]">
-                      <td className="px-2 py-1 text-[color:var(--color-text-secondary)]">
-                        {agent.agentType} #{agent.clientId}
-                      </td>
-                      <td className="num px-2 py-1 text-right">{agent.totalPnL}</td>
-                      <td className="num px-2 py-1 text-right">
-                        {toNumber(agent.averageFillProbability).toFixed(2)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            {artifacts.sweepSummary.length > 0 ? (
+              <SweepTable rows={artifacts.sweepSummary} />
+            ) : (
+              <AgentTable rows={artifacts.agentSummary} />
+            )}
           </CardBody>
         </Card>
       </div>
 
-      <div className="grid min-h-0 grid-rows-2 gap-1.5">
-        <div className="grid min-h-0 grid-cols-1 gap-1.5 lg:grid-cols-2">
+      <div className="grid min-h-0 grid-rows-2 gap-1">
+        <div className="grid min-h-0 grid-cols-1 gap-1 lg:grid-cols-2">
           <ChartCard title="Mid Price" points={midSeries} />
           <ChartCard title="Spread" points={spreadSeries} />
         </div>
-        <div className="grid min-h-0 grid-cols-1 gap-1.5 lg:grid-cols-3">
+        <div className="grid min-h-0 grid-cols-1 gap-1 lg:grid-cols-3">
           <ChartCard title="PnL" points={pnlSeries} />
           <ChartCard title="Inventory" points={inventorySeries} />
           <ChartCard title="Toxicity" points={toxicitySeries} />
@@ -206,18 +413,74 @@ export function BacktestResultsViewer() {
   )
 }
 
+function AgentTable({ rows }: { rows: CsvRow[] }) {
+  return (
+    <div className="h-full overflow-auto">
+      <table className="w-full text-[11px]">
+        <thead className="sticky top-0 bg-[color:var(--color-bg-header)] text-[color:var(--color-text-muted)]">
+          <tr>
+            <th className="px-2 py-1 text-left font-medium">Agent</th>
+            <th className="px-2 py-1 text-right font-medium">PnL</th>
+            <th className="px-2 py-1 text-right font-medium">Fill</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.slice(0, 80).map((agent) => (
+            <tr key={`${agent.symbol}-${agent.clientId}`} className="border-t border-[color:var(--color-border-subtle)]">
+              <td className="px-2 py-1 text-[color:var(--color-text-secondary)]">
+                {String(agent.agentType ?? '--')} #{String(agent.clientId ?? '--')}
+              </td>
+              <td className="num px-2 py-1 text-right">{agent.totalPnL ?? 0}</td>
+              <td className="num px-2 py-1 text-right">
+                {toNumber(agent.averageFillProbability).toFixed(2)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function SweepTable({ rows }: { rows: CsvRow[] }) {
+  return (
+    <div className="h-full overflow-auto">
+      <table className="w-full text-[11px]">
+        <thead className="sticky top-0 bg-[color:var(--color-bg-header)] text-[color:var(--color-text-muted)]">
+          <tr>
+            <th className="px-2 py-1 text-left font-medium">Run</th>
+            <th className="px-2 py-1 text-right font-medium">Trades</th>
+            <th className="px-2 py-1 text-right font-medium">PnL</th>
+            <th className="px-2 py-1 text-right font-medium">Eff x</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.slice(0, 80).map((row) => (
+            <tr key={String(row.name)} className="border-t border-[color:var(--color-border-subtle)]">
+              <td className="px-2 py-1 text-[color:var(--color-text-secondary)]">{row.name}</td>
+              <td className="num px-2 py-1 text-right">{row.tradeCount}</td>
+              <td className="num px-2 py-1 text-right">{row.finalTotalPnL}</td>
+              <td className="num px-2 py-1 text-right">{toNumber(row.effectiveSpeed).toFixed(1)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 function Metric({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="flex justify-between rounded-sm bg-[color:var(--color-bg-panel-alt)] px-2 py-1.5 text-[color:var(--color-text-secondary)]">
+    <div className="terminal-row flex justify-between bg-black px-2 py-1.5 text-[color:var(--color-text-secondary)]">
       <span>{label}</span>
-      <span className="num truncate pl-2 text-[color:var(--color-text-primary)]">{value}</span>
+      <span className="num truncate pl-2 font-bold text-[color:var(--color-text-primary)]">{value}</span>
     </div>
   )
 }
 
 function ChartCard({ title, points }: { title: string; points: Array<{ x: number; y: number }> }) {
   return (
-    <Card>
+    <Card className="terminal-grid">
       <CardHeader title={title} subtitle={`${points.length} pts`} />
       <CardBody>
         <LineChart points={points} />
@@ -257,5 +520,84 @@ function LineChart({ points }: { points: Array<{ x: number; y: number }> }) {
         <span className="num">{maxY.toFixed(2)}</span>
       </div>
     </div>
+  )
+}
+
+function fieldClass() {
+  return 'h-8 w-full border border-[color:var(--color-border-subtle)] bg-black px-2 text-[12px] text-[color:var(--color-text-primary)] outline-none focus:border-[color:var(--color-accent)]'
+}
+
+function TextField({
+  label,
+  name,
+  defaultValue = '',
+  placeholder,
+}: {
+  label: string
+  name: string
+  defaultValue?: string
+  placeholder?: string
+}) {
+  return (
+    <label className="space-y-1">
+      <span className="block text-[10px] uppercase tracking-wider text-[color:var(--color-text-muted)]">{label}</span>
+      <input className={fieldClass()} name={name} defaultValue={defaultValue} placeholder={placeholder} />
+    </label>
+  )
+}
+
+function NumberField({
+  label,
+  name,
+  defaultValue,
+  step = 1,
+  min = 0,
+}: {
+  label: string
+  name: string
+  defaultValue: number
+  step?: number
+  min?: number
+}) {
+  return (
+    <label className="space-y-1">
+      <span className="block text-[10px] uppercase tracking-wider text-[color:var(--color-text-muted)]">{label}</span>
+      <input className={fieldClass()} type="number" min={min} name={name} step={step} defaultValue={defaultValue} />
+    </label>
+  )
+}
+
+function SelectField({
+  label,
+  name,
+  defaultValue,
+  value,
+  onChange,
+  options,
+}: {
+  label: string
+  name: string
+  defaultValue?: string
+  value?: string
+  onChange?: (value: string) => void
+  options: Array<readonly [string, string]>
+}) {
+  return (
+    <label className="space-y-1">
+      <span className="block text-[10px] uppercase tracking-wider text-[color:var(--color-text-muted)]">{label}</span>
+      <select
+        className={fieldClass()}
+        name={name}
+        value={value}
+        defaultValue={value === undefined ? defaultValue : undefined}
+        onChange={(event) => onChange?.(event.target.value)}
+      >
+        {options.map(([id, optionLabel]) => (
+          <option key={id} value={id}>
+            {optionLabel}
+          </option>
+        ))}
+      </select>
+    </label>
   )
 }

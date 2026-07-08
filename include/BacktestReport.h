@@ -385,7 +385,7 @@ namespace Mercury {
 
     inline void writeSimStateCsv(const std::string& path, const std::vector<SimulationStateEvent>& states) {
         std::ostringstream out;
-        out << "sequence,symbol,enabled,running,paused,clockMode,speed,volatility,simulationTimestamp,marketMakerCount,momentumCount,meanReversionCount,noiseTraderCount,realizedVolatilityBps,averageSpread,toxicityScore,regime,limitLambda,cancelLambda,marketableLambda,marketMakerLevels,marketMakerQuoteQuantity,marketMakerMinQuantity,marketMakerBaseSpreadTicks,marketMakerToxicitySensitivity,marketMakerWakeIntervalMs\n";
+        out << "sequence,symbol,enabled,running,paused,clockMode,speed,volatility,simulationTimestamp,marketMakerCount,momentumCount,meanReversionCount,noiseTraderCount,realizedVolatilityBps,averageSpread,toxicityScore,regime,limitLambda,cancelLambda,marketableLambda,marketMakerLevels,marketMakerQuoteQuantity,marketMakerMinQuantity,marketMakerBaseSpreadTicks,marketMakerToxicitySensitivity,marketMakerWakeIntervalMs,marketMakerInventorySkewDivisor\n";
         for (const auto& state : states) {
             out << state.sequence << ','
                 << csvEscape(state.symbol) << ','
@@ -412,7 +412,8 @@ namespace Mercury {
                 << state.marketMakerMinQuantity << ','
                 << state.marketMakerBaseSpreadTicks << ','
                 << state.marketMakerToxicitySensitivity << ','
-                << state.marketMakerWakeIntervalMs << '\n';
+                << state.marketMakerWakeIntervalMs << ','
+                << state.marketMakerInventorySkewDivisor << '\n';
         }
         writeTextFile(path, out.str());
     }

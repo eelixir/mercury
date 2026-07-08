@@ -12,7 +12,7 @@ function latencyColor(ns: number | null): string {
 function formatLatency(ns: number | null): string {
   if (ns === null) return '--'
   const us = ns / 1000
-  if (us < 1000) return `${us.toFixed(1)} µs`
+  if (us < 1000) return `${us.toFixed(1)} us`
   return `${(us / 1000).toFixed(2)} ms`
 }
 
@@ -26,11 +26,11 @@ function Metric({
   valueClass?: string
 }) {
   return (
-    <div className="flex items-baseline justify-between border-b border-[color:var(--color-border-subtle)] px-2 py-1 last:border-b-0">
-      <span className="text-[10.5px] uppercase tracking-wider text-[color:var(--color-text-muted)]">
+    <div className="terminal-row flex items-baseline justify-between px-2 py-1 last:border-b-0">
+      <span className="text-[10.5px] uppercase text-[color:var(--color-text-muted)]">
         {label}
       </span>
-      <span className={`num text-[13px] font-semibold ${valueClass ?? 'text-[color:var(--color-text-primary)]'}`}>
+      <span className={`num text-[13px] font-bold ${valueClass ?? 'text-[color:var(--color-text-primary)]'}`}>
         {value}
       </span>
     </div>
@@ -57,8 +57,8 @@ export function SystemHealth() {
   return (
     <Card>
       <CardHeader
-        title="System Health"
-        subtitle="Engine"
+        title="Engine Status"
+        subtitle="engine"
         actions={
           <span className={`inline-block h-1.5 w-1.5 rounded-full pulse-dot ${connDot}`} />
         }

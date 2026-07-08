@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { OrderResponse, OrderType, Side } from '../lib/types'
-import { useActiveSymbol, useMarketDataStore } from '../store/market-data-store'
+import { useActiveBucket, useActiveSymbol, useMarketDataStore } from '../store/market-data-store'
 import { Button } from './ui/button'
 import { Card, CardBody, CardHeader } from './ui/card'
 import { Input } from './ui/input'
@@ -52,7 +52,7 @@ function SegmentedButton<T extends string>({
   toneFor?: (v: T) => 'buy' | 'sell' | 'accent'
 }) {
   return (
-    <div className="flex overflow-hidden rounded-sm border border-[color:var(--color-border-subtle)]">
+    <div className="flex overflow-hidden border border-[color:var(--color-border-strong)] bg-black">
       {options.map((opt) => {
         const active = opt.value === value
         const tone = toneFor?.(opt.value)
@@ -64,10 +64,10 @@ function SegmentedButton<T extends string>({
             key={opt.value}
             type="button"
             onClick={() => onChange(opt.value)}
-            className={`flex-1 px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider transition-colors ${
+            className={`flex-1 border-r border-[color:var(--color-border-subtle)] px-2 py-1.5 text-[11px] font-bold uppercase transition-colors last:border-r-0 ${
               active
                 ? activeBg
-                : 'bg-[color:var(--color-bg-panel-alt)] text-[color:var(--color-text-secondary)] hover:text-[color:var(--color-text-primary)]'
+                : 'bg-black text-[color:var(--color-text-secondary)] hover:bg-[color:var(--color-accent-dim)] hover:text-[color:var(--color-accent)]'
             }`}
           >
             {opt.label}
@@ -99,10 +99,12 @@ export function OrderEntryForm() {
   const trackOrderId = useMarketDataStore((state) => state.trackOrderId)
   const lastResponse = useMarketDataStore((state) => state.lastOrderResponse)
   const activeSymbol = useActiveSymbol()
+  const bucket = useActiveBucket()
 
   const [orderType, setOrderType] = useState<OrderType>('limit')
   const [side, setSide] = useState<Side>('buy')
-  const [price, setPrice] = useState('100')
+  const [price, setPrice] = useState('')
+  const [priceTouched, setPriceTouched] = useState(false)
   const [quantity, setQuantity] = useState('10')
   const [clientId, setClientId] = useState('1')
   const [orderId, setOrderId] = useState('')
@@ -115,19 +117,31 @@ export function OrderEntryForm() {
   const needsPrice = orderType === 'limit'
   const needsQuantity = orderType === 'limit' || orderType === 'market'
 
+  const suggestedLimitPrice = useMemo(() => {
+    const stats = bucket.stats
+    if (!stats) return 0
+    if (side === 'buy') {
+      return stats.bestAsk ?? stats.midPrice ?? 0
+    }
+    return stats.bestBid ?? stats.midPrice ?? 0
+  }, [bucket.stats, side])
+
+  const displayedLimitPrice =
+    needsPrice && !priceTouched && suggestedLimitPrice > 0 ? String(suggestedLimitPrice) : price
+
   const submitVariant: 'buy' | 'sell' | 'default' =
     isCancel || isModify ? 'default' : side === 'buy' ? 'buy' : 'sell'
   const submitLabel = submitting
-    ? 'Working…'
+    ? 'Working...'
     : isCancel
       ? 'Cancel Order'
       : isModify
         ? 'Modify Order'
-        : `${side === 'buy' ? 'Buy' : 'Sell'} · ${orderType.toUpperCase()}`
+        : `${side === 'buy' ? 'Buy' : 'Sell'} ${orderType.toUpperCase()}`
 
   return (
     <Card>
-      <CardHeader title="Order Entry" subtitle="Manual" />
+      <CardHeader title={`Place Order | ${activeSymbol}`} subtitle="manual" />
       <CardBody>
         <form
           className="space-y-2.5"
@@ -149,7 +163,7 @@ export function OrderEntryForm() {
                 tif: 'GTC',
                 symbol: activeSymbol,
               }
-              if (needsPrice) request.price = toNum(price)
+              if (needsPrice) request.price = toNum(displayedLimitPrice)
               if (needsQuantity) request.quantity = toNum(quantity)
               if (isCancel || isModify) request.orderId = toNum(orderId)
               if (isModify && newPrice) request.newPrice = toNum(newPrice)
@@ -160,6 +174,8 @@ export function OrderEntryForm() {
                 setLastOrderResponse(response)
                 if (response.submittedOrderId > 0) trackOrderId(response.submittedOrderId)
                 if (response.orderId > 0) trackOrderId(response.orderId)
+                setPrice('')
+                setPriceTouched(false)
               } catch (err) {
                 setLastOrderResponse({
                   submittedOrderId: 0,
@@ -202,9 +218,13 @@ export function OrderEntryForm() {
             <Field label="Price">
               <Input
                 type="number"
-                value={price}
-                onChange={(e) => setPrice(e.target.value)}
+                value={needsPrice ? displayedLimitPrice : ''}
+                onChange={(e) => {
+                  setPrice(e.target.value)
+                  setPriceTouched(true)
+                }}
                 disabled={!needsPrice}
+                placeholder={suggestedLimitPrice > 0 ? String(suggestedLimitPrice) : '--'}
               />
             </Field>
             <Field label="Qty">
@@ -231,7 +251,7 @@ export function OrderEntryForm() {
                 value={orderId}
                 onChange={(e) => setOrderId(e.target.value)}
                 disabled={!isCancel && !isModify}
-                placeholder={isCancel || isModify ? 'Order ID' : '—'}
+                placeholder={isCancel || isModify ? 'Order ID' : '--'}
               />
             </Field>
           </div>

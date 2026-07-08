@@ -1,11 +1,12 @@
 import { useMemo } from 'react'
 import { formatClock, formatPrice } from '../lib/format'
-import { useActiveBucket, useMarketDataStore } from '../store/market-data-store'
+import { useActiveBucket, useActiveSymbol, useMarketDataStore } from '../store/market-data-store'
 import { Badge } from './ui/badge'
 import { Card, CardBody, CardHeader } from './ui/card'
 
 export function TradeTape() {
   const trades = useActiveBucket().trades
+  const activeSymbol = useActiveSymbol()
   const submittedOrderIds = useMarketDataStore((state) => state.submittedOrderIds)
 
   const decoratedTrades = useMemo(() => {
@@ -29,10 +30,10 @@ export function TradeTape() {
   const lastPrice = trades[0]?.price ?? null
 
   return (
-    <Card>
+    <Card className="terminal-grid">
       <CardHeader
-        title="Time & Sales"
-        subtitle="Trade Tape"
+        title={`Trades | ${activeSymbol}`}
+        subtitle="time & sales"
         actions={
           lastPrice !== null ? (
             <span className="num text-[11px] text-[color:var(--color-text-primary)]">
@@ -43,7 +44,7 @@ export function TradeTape() {
       />
       <CardBody flush>
         <div className="flex h-full min-h-0 flex-col">
-          <div className="grid grid-cols-[0.9fr_1fr_1fr_0.8fr] border-b border-[color:var(--color-border-subtle)] px-2 py-1 text-[9.5px] font-semibold uppercase tracking-wider text-[color:var(--color-text-muted)]">
+          <div className="terminal-table-head grid grid-cols-[0.9fr_1fr_1fr_0.8fr] border-b border-[color:var(--color-border-subtle)] px-2 py-1 text-[9.5px] font-bold uppercase">
             <span>Time</span>
             <span className="text-right">Price</span>
             <span className="text-right">Size</span>
@@ -63,11 +64,11 @@ export function TradeTape() {
                     : direction === 'down'
                       ? 'text-[color:var(--color-sell)]'
                       : 'text-[color:var(--color-text-primary)]'
-                const arrow = direction === 'up' ? '▲' : direction === 'down' ? '▼' : '·'
+                const arrow = direction === 'up' ? '^' : direction === 'down' ? 'v' : '-'
                 return (
                   <div
                     key={trade.tradeId}
-                    className={`grid grid-cols-[0.9fr_1fr_1fr_0.8fr] items-center px-2 py-[2px] text-[12px] hover:bg-[color:var(--color-bg-row-hover)] ${
+                    className={`terminal-row grid grid-cols-[0.9fr_1fr_1fr_0.8fr] items-center px-2 py-[2px] text-[12px] ${
                       isSelf
                         ? 'border-l-2 border-l-[color:var(--color-accent)] bg-[color:var(--color-accent)]/[0.06]'
                         : ''

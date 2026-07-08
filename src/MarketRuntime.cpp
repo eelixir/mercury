@@ -1022,6 +1022,23 @@ namespace Mercury {
             publishSimulationState(true);
             return true;
         }
+        if (control.action == "set_timing") {
+            if (!control.hasTiming) {
+                return false;
+            }
+
+            const auto requestedMode = simulationClockModeFromString(control.clockMode);
+            if (requestedMode == SimulationClockMode::Instant) {
+                return false;
+            }
+
+            simulationConfig_.clockMode = requestedMode;
+            simulationConfig_.speed = requestedMode == SimulationClockMode::Realtime
+                ? 1.0
+                : std::clamp(control.speed, 0.1, 250.0);
+            publishSimulationState(true);
+            return true;
+        }
         if (control.action == "set_counts") {
             if (!control.hasAgentCounts) {
                 return false;
@@ -1719,6 +1736,7 @@ namespace Mercury {
             event.marketMakerBaseSpreadTicks = simulationConfig_.marketMaker.baseSpreadTicks;
             event.marketMakerToxicitySensitivity = simulationConfig_.marketMaker.toxicitySensitivity;
             event.marketMakerWakeIntervalMs = simulationConfig_.marketMaker.wakeIntervalMs;
+            event.marketMakerInventorySkewDivisor = simulationConfig_.marketMaker.inventorySkewDivisor;
 
             fanout([&](MarketDataSink* sink) { sink->onSimulationState(event); });
         }

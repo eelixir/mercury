@@ -1,33 +1,37 @@
-import { createChart, LineSeries, type IChartApi, type ISeriesApi } from 'lightweight-charts'
+import { CandlestickSeries, createChart, type IChartApi, type ISeriesApi } from 'lightweight-charts'
 import { useEffect, useMemo, useRef } from 'react'
 import { Card, CardBody, CardHeader } from './ui/card'
 import { formatPrice } from '../lib/format'
-import { useActiveBucket } from '../store/market-data-store'
+import { useActiveBucket, useActiveSymbol } from '../store/market-data-store'
 
 export function MidPriceChart() {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const chartRef = useRef<IChartApi | null>(null)
-  const seriesRef = useRef<ISeriesApi<'Line'> | null>(null)
+  const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
+  const didFitInitialRangeRef = useRef(false)
   const bucket = useActiveBucket()
+  const activeSymbol = useActiveSymbol()
   const chartPoints = bucket.chartPoints
   const stats = bucket.stats
 
-  const deferredPoints = useMemo(() => {
-    // lightweight-charts requires strictly ascending `time`. Our chartPoints
-    // can arrive multiple-per-second and aren't guaranteed to be sorted, so
-    // bucket to the nearest second and keep the last value per bucket.
-    const byTime = new Map<number, number>()
+  const candles = useMemo(() => {
+    const byTime = new Map<number, { open: number; high: number; low: number; close: number }>()
     for (const point of chartPoints) {
       const t = Math.floor(point.timestamp / 1000)
-      byTime.set(t, point.value)
+      byTime.set(t, {
+        open: point.open,
+        high: point.high,
+        low: point.low,
+        close: point.close,
+      })
     }
     return Array.from(byTime.entries())
       .sort(([a], [b]) => a - b)
-      .map(([time, value]) => ({ time: time as never, value }))
+      .map(([time, value]) => ({ time: time as never, ...value }))
   }, [chartPoints])
 
-  const first = chartPoints[0]?.value
-  const last = chartPoints[chartPoints.length - 1]?.value
+  const first = chartPoints[0]?.open
+  const last = chartPoints[chartPoints.length - 1]?.close
   const delta = first !== undefined && last !== undefined ? last - first : 0
   const deltaPct = first ? (delta / first) * 100 : 0
   const deltaClass =
@@ -44,34 +48,49 @@ export function MidPriceChart() {
       autoSize: true,
       layout: {
         background: { color: 'transparent' },
-        textColor: '#8b94a4',
-        fontFamily: "'JetBrains Mono', 'IBM Plex Mono', monospace",
+        textColor: '#8f918a',
+        fontFamily: "'Cascadia Code', 'JetBrains Mono', monospace",
         fontSize: 10,
       },
       grid: {
-        vertLines: { color: 'rgba(148, 163, 184, 0.05)' },
-        horzLines: { color: 'rgba(148, 163, 184, 0.05)' },
+        vertLines: { color: 'rgba(255, 255, 255, 0.032)' },
+        horzLines: { color: 'rgba(255, 255, 255, 0.032)' },
       },
       rightPriceScale: {
-        borderColor: 'rgba(148, 163, 184, 0.12)',
+        borderColor: 'rgba(255, 255, 255, 0.14)',
       },
       timeScale: {
-        borderColor: 'rgba(148, 163, 184, 0.12)',
+        borderColor: 'rgba(255, 255, 255, 0.14)',
         timeVisible: true,
         secondsVisible: true,
       },
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: false,
+      },
+      handleScale: {
+        axisPressedMouseMove: true,
+        mouseWheel: true,
+        pinch: true,
+      },
       crosshair: {
-        vertLine: { color: 'rgba(148, 163, 184, 0.3)', width: 1, style: 3 },
-        horzLine: { color: 'rgba(148, 163, 184, 0.3)', width: 1, style: 3 },
+        vertLine: { color: 'rgba(0, 229, 177, 0.42)', width: 1, style: 3 },
+        horzLine: { color: 'rgba(0, 229, 177, 0.42)', width: 1, style: 3 },
       },
     })
 
-    const series = chart.addSeries(LineSeries, {
-      color: '#4f8cff',
-      lineWidth: 2,
+    const series = chart.addSeries(CandlestickSeries, {
+      upColor: '#438b5a',
+      downColor: '#c5553f',
+      borderUpColor: '#438b5a',
+      borderDownColor: '#c5553f',
+      wickUpColor: '#6fa77c',
+      wickDownColor: '#d06a56',
       lastValueVisible: true,
       priceLineVisible: true,
-      priceLineColor: 'rgba(79, 140, 255, 0.4)',
+      priceLineColor: 'rgba(78, 154, 98, 0.48)',
       priceLineStyle: 2,
     })
 
@@ -87,20 +106,34 @@ export function MidPriceChart() {
 
   useEffect(() => {
     if (!seriesRef.current) return
-    seriesRef.current.setData(deferredPoints)
-  }, [deferredPoints])
+    seriesRef.current.setData(candles)
+
+    if (candles.length === 0) {
+      didFitInitialRangeRef.current = false
+      return
+    }
+
+    if (!didFitInitialRangeRef.current) {
+      chartRef.current?.timeScale().fitContent()
+      didFitInitialRangeRef.current = true
+    }
+  }, [candles])
+
+  useEffect(() => {
+    didFitInitialRangeRef.current = false
+  }, [activeSymbol])
 
   return (
-    <Card>
+    <Card className="terminal-grid">
       <CardHeader
-        title="Mid-Price"
-        subtitle="1s · Line"
+        title={`Chart | ${activeSymbol}`}
+        subtitle="Candles: 1s"
         actions={
-          <div className="flex items-center gap-3">
-            <span className="num text-[12px] font-semibold text-[color:var(--color-text-primary)]">
+          <div className="flex items-center gap-2">
+            <span className="num text-[11px] font-semibold text-[color:var(--color-text-primary)]">
               {formatPrice(stats?.midPrice ?? null)}
             </span>
-            <span className={`num text-[11px] font-semibold ${deltaClass}`}>
+            <span className={`num text-[10px] font-semibold ${deltaClass}`}>
               {delta >= 0 ? '+' : ''}
               {delta.toFixed(2)} ({deltaPct >= 0 ? '+' : ''}
               {deltaPct.toFixed(2)}%)
