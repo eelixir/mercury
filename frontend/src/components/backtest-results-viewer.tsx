@@ -85,6 +85,14 @@ function toNumber(value: unknown): number {
   return Number.isFinite(n) ? n : 0
 }
 
+function toFiniteNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') {
+    return null
+  }
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
 function metric(summary: Record<string, unknown> | null, key: string): number {
   return toNumber(summary?.[key])
 }
@@ -96,8 +104,12 @@ function nestedNumber(source: Record<string, unknown> | null, group: string, key
 
 function makeSeries(rows: CsvRow[], xKey: string, yKey: string) {
   return rows
-    .map((row) => ({ x: toNumber(row[xKey]), y: toNumber(row[yKey]) }))
-    .filter((point) => point.y !== 0)
+    .map((row) => {
+      const x = toFiniteNumber(row[xKey])
+      const y = toFiniteNumber(row[yKey])
+      return x === null || y === null ? null : { x, y }
+    })
+    .filter((point): point is { x: number; y: number } => point !== null)
     .slice(-180)
 }
 
@@ -246,7 +258,7 @@ export function BacktestResultsViewer() {
     <div className="grid h-full min-h-0 grid-cols-1 gap-1 p-1 xl:grid-cols-[23rem_minmax(0,1fr)]">
       <div className="flex min-h-0 flex-col gap-1 overflow-y-auto pr-1">
         <Card>
-          <CardHeader title="Lab Runner" subtitle={busy ? 'running' : 'offline'} />
+          <CardHeader title="Simulation Lab" subtitle={busy ? 'running' : 'local'} />
           <CardBody>
             <form className="space-y-3" onSubmit={runLab}>
               <div className="grid grid-cols-2 gap-2">
@@ -325,14 +337,14 @@ export function BacktestResultsViewer() {
               ) : null}
 
               <Button className="w-full" variant="default" disabled={busy} type="submit">
-                {busy ? 'Running...' : 'Run Lab Job'}
+                {busy ? 'Running...' : 'Run Job'}
               </Button>
             </form>
           </CardBody>
         </Card>
 
         <Card>
-          <CardHeader title="Backtest Artifacts" subtitle="Import" />
+          <CardHeader title="Run Artifacts" subtitle="Import" />
           <CardBody>
             <div className="space-y-3">
               <input
@@ -511,8 +523,8 @@ function LineChart({ points }: { points: Array<{ x: number; y: number }> }) {
     .join(' ')
 
   return (
-    <div className="h-full min-h-[11rem]">
-      <svg className="h-full w-full" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
+    <div className="flex h-full min-h-[11rem] flex-col">
+      <svg className="min-h-0 flex-1 w-full" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
         <path d={path} fill="none" stroke="var(--color-accent)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
       </svg>
       <div className="mt-1 flex justify-between text-[10px] text-[color:var(--color-text-muted)]">

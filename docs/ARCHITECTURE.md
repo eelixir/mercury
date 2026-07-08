@@ -324,7 +324,7 @@ Sequence semantics:
 
 - a single monotonically increasing sequence spans `book_delta`, `trade`, `execution`, `stats`, `pnl`, and `sim_state`
 - snapshots use the current engine sequence at extraction time
-- frontend consumers use sequence to reject stale frames and detect resync conditions
+- frontend consumers use sequence to reject stale market frames; exact gap detection is not applied because non-market event types share the same global sequence
 
 ### ServerApp
 
@@ -417,12 +417,12 @@ Client behavior:
 - initial WebSocket snapshot seeds the store
 - incoming WebSocket frames are batched to animation frames before store application so high-rate streams do not force hundreds of React renders per second
 - subsequent deltas update only affected levels
-- sequence gaps trigger resync logic instead of blindly applying out-of-order frames
+- stale market frames are ignored without exact gap resync because the global sequence also covers PnL, execution, simulation, and agent frames
 - `execution` envelopes are accepted as sequencing events without changing book state
 - `sim_state` updates drive the operator controls, regime/noise telemetry, and runtime status badges
 - `agent_metrics` updates drive the live attribution table
 - order entry uses `POST /api/orders` with an editable `clientId`
-- Lab view uses `POST /api/lab/run` for local offline runs and renders returned summary/artifacts without requiring file import
+- Lab view uses `POST /api/lab/run` for local instant/headless runs and renders returned summary/artifacts without requiring file import
 - submitted order IDs are tracked so the trade tape can highlight the user's own fills
 - `engineLatencyNs` from `book_delta` and `trade` payloads feeds the System Health card
 - `messagesPerSecond` from `stats` payloads feeds the System Health card

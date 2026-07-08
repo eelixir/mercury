@@ -46,7 +46,6 @@ export function useMarketDataWebSocket() {
     let frameTimer: number | null = null
     let attempt = 0
     let disposed = false
-    let resyncPending = false
     let pendingEnvelopes: MarketEnvelope[] = []
 
     const flushPending = () => {
@@ -55,22 +54,12 @@ export function useMarketDataWebSocket() {
 
       const batch = pendingEnvelopes
       pendingEnvelopes = []
-      let needsResync = false
 
       unstable_batchedUpdates(() => {
         for (const envelope of batch) {
-          if (envelope.type === 'snapshot') {
-            resyncPending = false
-            needsResync = false
-          }
-          needsResync = applyEnvelope(envelope) || needsResync
+          applyEnvelope(envelope)
         }
       })
-
-      if (needsResync && !resyncPending && ws && ws.readyState === WebSocket.OPEN) {
-        resyncPending = true
-        ws.send(JSON.stringify({ type: 'subscribe', depth: 20 }))
-      }
     }
 
     const connect = () => {

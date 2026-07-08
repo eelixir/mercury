@@ -79,7 +79,7 @@ interface MarketDataState {
   setActiveClientId: (clientId: number) => void
   setLastOrderResponse: (response: OrderResponse | null) => void
   trackOrderId: (orderId: number) => void
-  applyEnvelope: (envelope: MarketEnvelope) => boolean
+  applyEnvelope: (envelope: MarketEnvelope) => void
   reset: () => void
 }
 
@@ -214,7 +214,7 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
     }),
   applyEnvelope: (envelope) => {
     const symbol = envelope.symbol
-    if (!symbol) return false
+    if (!symbol) return
 
     const state = get()
     const updatesMarketSequence =
@@ -230,7 +230,7 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
       envelope.sequence <= state.streamSequence &&
       envelope.sequence <= symbolSequence
     ) {
-      return false
+      return
     }
 
     set((prev) => {
@@ -456,7 +456,6 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
       }
     })
 
-    return false
   },
 }))
 

@@ -49,7 +49,7 @@ The Zustand store (`src/store/market-data-store.ts`) handles:
 - **Agent metrics**: per-agent P&L, fill counts, queue position, quantity ahead, and fill probability
 - **Telemetry**: `engineLatencyNs` from deltas/trades, `messagesPerSecond` from stats
 - **Self-trade detection**: submitted order IDs tracked in a `Set<number>`
-- **Sequence gap detection**: triggers resync via WebSocket subscribe message
+- **Sequence handling**: rejects stale market frames while accepting global sequence gaps caused by PnL, execution, simulation, and agent frames
 
 ## WebSocket Connection
 
@@ -57,7 +57,7 @@ The Zustand store (`src/store/market-data-store.ts`) handles:
 
 - Auto-connect to `/ws/market` with exponential backoff reconnect
 - Subscribe message with configurable depth
-- Sequence gap detection -> automatic resync
+- Animation-frame batching before store updates
 - Cleanup on unmount
 
 ## Testing

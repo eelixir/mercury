@@ -25,7 +25,7 @@ describe('market data store', () => {
       },
     })
 
-    const needsResync = store.applyEnvelope({
+    store.applyEnvelope({
       type: 'book_delta',
       sequence: 2,
       symbol: 'SIM',
@@ -41,7 +41,6 @@ describe('market data store', () => {
 
     const snapshot = useMarketDataStore.getState()
     const bucket = snapshot.bySymbol['SIM']
-    expect(needsResync).toBe(false)
     expect(bucket.bids[0].quantity).toBe(9)
     expect(bucket.sequence).toBe(2)
   })
@@ -64,7 +63,7 @@ describe('market data store', () => {
       },
     })
 
-    const needsResync = useMarketDataStore.getState().applyEnvelope({
+    useMarketDataStore.getState().applyEnvelope({
       type: 'trade',
       sequence: 14,
       symbol: 'SIM',
@@ -80,7 +79,6 @@ describe('market data store', () => {
       },
     })
 
-    expect(needsResync).toBe(false)
     expect(useMarketDataStore.getState().bySymbol['SIM'].trades).toHaveLength(1)
   })
 
@@ -119,7 +117,7 @@ describe('market data store', () => {
       },
     })
 
-    const aaplNeedsResync = store.applyEnvelope({
+    store.applyEnvelope({
       type: 'book_delta',
       sequence: 11,
       symbol: 'AAPL',
@@ -133,7 +131,7 @@ describe('market data store', () => {
       },
     })
 
-    const simNeedsResync = store.applyEnvelope({
+    store.applyEnvelope({
       type: 'trade',
       sequence: 12,
       symbol: 'SIM',
@@ -150,8 +148,6 @@ describe('market data store', () => {
     })
 
     const snapshot = useMarketDataStore.getState()
-    expect(aaplNeedsResync).toBe(false)
-    expect(simNeedsResync).toBe(false)
     expect(snapshot.bySymbol['SIM'].trades).toHaveLength(1)
     expect(snapshot.bySymbol['AAPL'].bids[0].quantity).toBe(8)
   })
@@ -191,7 +187,7 @@ describe('market data store', () => {
       },
     })
 
-    const needsResync = store.applyEnvelope({
+    store.applyEnvelope({
       type: 'book_delta',
       sequence: 15,
       symbol: 'SIM',
@@ -206,13 +202,12 @@ describe('market data store', () => {
     })
 
     const snapshot = useMarketDataStore.getState()
-    expect(needsResync).toBe(false)
     expect(snapshot.bySymbol['SIM'].bids[0].quantity).toBe(9)
     expect(snapshot.streamSequence).toBe(20)
   })
 
   it('applies simulation state without forcing resync', () => {
-    const needsResync = useMarketDataStore.getState().applyEnvelope({
+    useMarketDataStore.getState().applyEnvelope({
       type: 'sim_state',
       sequence: 3,
       symbol: 'SIM',
@@ -238,7 +233,6 @@ describe('market data store', () => {
       },
     })
 
-    expect(needsResync).toBe(false)
     expect(useMarketDataStore.getState().bySymbol['SIM'].simulation?.volatility).toBe('high')
     expect(useMarketDataStore.getState().bySymbol['SIM'].simulation?.regime).toBe('stressed')
   })
@@ -247,7 +241,7 @@ describe('market data store', () => {
     const store = useMarketDataStore.getState()
 
     for (let i = 0; i < 1000; i += 1) {
-      const needsResync = store.applyEnvelope({
+      store.applyEnvelope({
         type: 'stats',
         sequence: i + 1,
         symbol: 'SIM',
@@ -265,8 +259,6 @@ describe('market data store', () => {
           messagesPerSecond: 100,
         },
       })
-
-      expect(needsResync).toBe(false)
     }
 
     const points = useMarketDataStore.getState().bySymbol['SIM'].chartPoints
@@ -322,7 +314,7 @@ describe('market data store', () => {
 
     store.trackOrderId(44)
 
-    const resetNeedsResync = store.applyEnvelope({
+    store.applyEnvelope({
       type: 'sim_state',
       sequence: 0,
       symbol: 'SIM',
@@ -348,7 +340,7 @@ describe('market data store', () => {
       },
     })
 
-    const statsNeedsResync = store.applyEnvelope({
+    store.applyEnvelope({
       type: 'stats',
       sequence: 1,
       symbol: 'SIM',
@@ -368,8 +360,6 @@ describe('market data store', () => {
     })
 
     const snapshot = useMarketDataStore.getState()
-    expect(resetNeedsResync).toBe(false)
-    expect(statsNeedsResync).toBe(false)
     expect(snapshot.streamSequence).toBe(1)
     expect(snapshot.submittedOrderIds.size).toBe(0)
     expect(snapshot.bySymbol['SIM'].bids).toEqual([])
@@ -379,7 +369,7 @@ describe('market data store', () => {
   })
 
   it('applies agent metrics without changing other agent rows', () => {
-    const needsResync = useMarketDataStore.getState().applyEnvelope({
+    useMarketDataStore.getState().applyEnvelope({
       type: 'agent_metrics',
       sequence: 4,
       symbol: 'SIM',
@@ -412,7 +402,6 @@ describe('market data store', () => {
     })
 
     const metrics = useMarketDataStore.getState().bySymbol['SIM'].agentMetricsByClient[1000]
-    expect(needsResync).toBe(false)
     expect(metrics.agentType).toBe('market_maker')
     expect(metrics.averageFillProbability).toBe(0.42)
   })
@@ -455,7 +444,7 @@ describe('market data store', () => {
       },
     })
 
-    const needsResync = store.applyEnvelope({
+    store.applyEnvelope({
       type: 'pnl',
       sequence: 20,
       symbol: 'SIM',
@@ -470,7 +459,6 @@ describe('market data store', () => {
     })
 
     const snapshot = useMarketDataStore.getState()
-    expect(needsResync).toBe(false)
     expect(snapshot.streamSequence).toBe(21)
     expect(snapshot.bySymbol['SIM'].pnlByClient[1].totalPnL).toBe(20)
   })

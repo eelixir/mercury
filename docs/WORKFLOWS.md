@@ -65,7 +65,7 @@ Required checks:
 - replay and HTTP orders still feed the same runtime path
 - simulation controls and runtime-state reporting stay aligned with backend behavior
 - live timing and replay controls stay aligned between `/api/simulation/control`, `/api/replay/control`, and the frontend operator panel
-- offline lab controls stay aligned between CLI backtest/sweep/calibration behavior, `/api/lab/run`, and the frontend Lab tab
+- local lab controls stay aligned between CLI backtest/sweep/calibration behavior, `/api/lab/run`, and the frontend Lab tab
 - instant backtests stay CPU-paced and do not block on real-time sleeps
 - `--backtest-output` artifacts stay parseable and aligned with emitted DTO fields
 - `--sweep` applies the same simulation knobs as the single-run CLI path
@@ -118,7 +118,7 @@ Read first:
 Rules:
 
 - preserve the current backend contract unless the task explicitly changes it
-- keep sequence-gap handling explicit
+- keep stale-frame handling explicit, and do not assume exact sequence adjacency for market frames because the backend sequence also spans PnL, execution, simulation, and agent frames
 - keep simulation status and operator controls consistent with `sim_state`
 - prefer simple fixed-view rendering for the ladder over table abstractions
 - keep the UI localhost-development oriented; production serving is not in scope
@@ -361,7 +361,7 @@ Before finishing a change, confirm:
 
 - the modified behavior is covered by a backend or frontend test
 - HTTP or WebSocket contract changes are covered by `tests/server_api_contract_test.cpp` or an equivalent integration test
-- sequence handling still makes sense for reconnect and resync paths
+- sequence handling still makes sense for reconnects and stale-frame rejection
 - manual orders, replay, and simulated agents still converge on the same runtime path
 - HTTP and WebSocket contracts are still documented correctly
 - docs do not overstate unsupported production features

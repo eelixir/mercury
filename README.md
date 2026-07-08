@@ -12,7 +12,7 @@ The intended use case is experimentation: compare liquidity-provision settings, 
 - **3.2M+ orders/sec** sustained throughput
 - **~320 ns** average order insertion latency
 - **O(1)** order lookup, insertion, and cancellation
-- **247** backend tests, all passing
+- **249** backend tests, all passing
 - **Nanosecond** gateway-to-engine latency instrumentation
 
 ## Features
@@ -146,7 +146,7 @@ mercury/
 |   |-- ServerApp.cpp
 |   `-- main.cpp
 |-- scenarios/                  # Versioned market-making lab scenarios
-|-- tests/                      # Google Test suites (247 tests)
+|-- tests/                      # Google Test suites (249 tests)
 |-- benchmarks/                 # Optional benchmark target
 |-- frontend/                   # React/Vite/TypeScript dashboard
 |-- data/                       # Sample CSV inputs
@@ -462,7 +462,7 @@ cmake --build build
 
 ## Testing
 
-247 unit tests covering:
+249 unit tests covering:
 - Order book operations (insert, remove, update)
 - Matching engine (limit, market, IOC, FOK)
 - Risk manager (position limits, exposure limits)
