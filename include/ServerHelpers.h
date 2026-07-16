@@ -7,7 +7,9 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <memory>
 #include <string>
 #include <string_view>
 
@@ -254,6 +256,7 @@ namespace Mercury {
 
         inline std::string simStateEnvelope(const SimulationStateEvent& state) {
             json payload{
+                {"symbols", state.symbols},
                 {"enabled", state.enabled},
                 {"running", state.running},
                 {"paused", state.paused},
@@ -386,6 +389,19 @@ namespace Mercury {
             res->writeStatus(status);
             res->writeHeader("Content-Type", "application/json");
             res->end(payload.dump());
+        }
+
+        // Abort-safe JSON write. uWS invalidates HttpResponse after onAborted;
+        // never call write/end on a response the client has already dropped.
+        template <bool SSL>
+        void writeJsonIfOpen(uWS::HttpResponse<SSL>* res,
+                             const std::shared_ptr<std::atomic<bool>>& aborted,
+                             std::string_view status,
+                             const json& payload) {
+            if (!res || (aborted && aborted->load(std::memory_order_acquire))) {
+                return;
+            }
+            writeJson(res, status, payload);
         }
 
     }  // namespace helpers

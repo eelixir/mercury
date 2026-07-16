@@ -359,6 +359,8 @@ namespace Mercury {
 
         void createEngineService();
         void rebuildAgents();
+        /** Cancel all tracked agent live orders in the engine (orphan cleanup). */
+        void cancelTrackedLiveOrders();
         void simulationLoop();
         void advanceEnvironment(const std::string& symbol, uint64_t stepMs);
         void maybeWakeAgents();
@@ -381,6 +383,8 @@ namespace Mercury {
                              uint64_t submittedCount);
         void updateMetricsFromStats(const std::string& symbol, const StatsEvent& stats);
         void restartRuntime();
+        /** Snapshot of simulationConfig_ under stateMutex_ for cross-thread reads. */
+        SimulationConfig copySimulationConfig() const;
 
         static uint64_t steadyNowNs();
     };

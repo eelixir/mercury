@@ -37,10 +37,16 @@ namespace Mercury {
         // Release references; subsequent broadcasts become no-ops.
         void detach();
 
-        // Connection counter maintained by the ServerApp WS handlers.
+        // Connection counters maintained by the ServerApp WS handlers.
+        // JSON and binary sockets are tracked separately so /api/state can
+        // report an accurate total without double-counting consumers.
         void incrementConnections();
         void decrementConnections();
-        uint64_t connectionCount() const;
+        void incrementBinaryConnections();
+        void decrementBinaryConnections();
+        uint64_t connectionCount() const;          // json + binary
+        uint64_t jsonConnectionCount() const;
+        uint64_t binaryConnectionCount() const;
 
         // MarketDataSink — serialize, then defer publish onto the network loop.
         void onBookDelta(const BookDelta& delta) override;
@@ -58,7 +64,8 @@ namespace Mercury {
         mutable std::mutex mutex_;
         uWS::Loop* loop_ = nullptr;
         uWS::App* app_ = nullptr;
-        std::atomic<uint64_t> connections_{0};
+        std::atomic<uint64_t> jsonConnections_{0};
+        std::atomic<uint64_t> binaryConnections_{0};
     };
 
 }

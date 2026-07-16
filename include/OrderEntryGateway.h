@@ -4,6 +4,10 @@
 
 #include <App.h>
 
+#include <atomic>
+#include <memory>
+#include <string>
+
 namespace Mercury {
 
     // Handles HTTP POST /api/orders.
@@ -34,9 +38,11 @@ namespace Mercury {
         MarketRuntime& runtime_;
 
         // Called when the full request body has arrived.
+        // @p aborted is set by onAborted; must not write the response if true.
         template <bool SSL>
         void handleRequest(uWS::HttpResponse<SSL>* res,
-                           const std::string& body);
+                           const std::string& body,
+                           const std::shared_ptr<std::atomic<bool>>& aborted);
     };
 
 }

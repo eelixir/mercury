@@ -184,19 +184,48 @@ namespace Mercury {
         }
 
         /**
-         * Update position after a fill
+         * Strategy-specific tracking after a fill.
+         * Note: state_.netPosition / long/short are updated by StrategyManager
+         * before this is called. Only average-entry bookkeeping belongs here.
          */
         void updatePosition(Side side, uint64_t filledQty, int64_t price) {
-            if (side == Side::Buy) {
-                state_.netPosition += static_cast<int64_t>(filledQty);
-                state_.longPosition += static_cast<int64_t>(filledQty);
-            } else {
-                state_.netPosition -= static_cast<int64_t>(filledQty);
-                state_.shortPosition += static_cast<int64_t>(filledQty);
-            }
-            
-            // Track average entry for P&L
             updateAverageEntry(side, filledQty, price);
+        }
+
+        /**
+         * Direct inventory mutation for unit tests (bypasses StrategyManager).
+         */
+        void setInventoryForTest(Side side, uint64_t qty, int64_t price) {
+            if (side == Side::Buy) {
+                state_.netPosition += static_cast<int64_t>(qty);
+                state_.longPosition += static_cast<int64_t>(qty);
+            } else {
+                state_.netPosition -= static_cast<int64_t>(qty);
+                state_.shortPosition += static_cast<int64_t>(qty);
+            }
+            updateAverageEntry(side, qty, price);
+        }
+
+        /** Record an acknowledged live quote after the engine rests it. */
+        void onQuoteRested(Side side, int64_t price, uint64_t quantity) {
+            if (side == Side::Buy) {
+                lastBidPrice_ = price;
+                lastBidQty_ = quantity;
+            } else {
+                lastAskPrice_ = price;
+                lastAskQty_ = quantity;
+            }
+        }
+
+        /** Clear quote state after rejection, cancellation, or full fill. */
+        void onQuoteClosed(Side side) {
+            if (side == Side::Buy) {
+                lastBidPrice_ = 0;
+                lastBidQty_ = 0;
+            } else {
+                lastAskPrice_ = 0;
+                lastAskQty_ = 0;
+            }
         }
 
         /**

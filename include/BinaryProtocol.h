@@ -26,10 +26,15 @@ namespace Mercury {
     static constexpr uint8_t BINARY_TYPE_BOOK_DELTA = 1;
     static constexpr uint8_t BINARY_TYPE_TRADE      = 2;
 
+    // Wire layout is ABI-stable for existing binary clients: 8-byte
+    // null-terminated symbol (7 chars + NUL). Longer symbols truncate here;
+    // the JSON WebSocket carries the full symbol string.
+    static constexpr size_t BINARY_SYMBOL_LEN = 8;
+
     struct BinaryBookDelta {
         BinaryHeader header;
         uint64_t sequence;
-        char     symbol[8];
+        char     symbol[BINARY_SYMBOL_LEN];
         uint8_t  side;            // 0 = buy, 1 = sell
         int64_t  price;
         uint64_t quantity;
@@ -42,7 +47,7 @@ namespace Mercury {
     struct BinaryTradeEvent {
         BinaryHeader header;
         uint64_t sequence;
-        char     symbol[8];
+        char     symbol[BINARY_SYMBOL_LEN];
         uint64_t tradeId;
         int64_t  price;
         uint64_t quantity;

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { formatPrice } from '../lib/format'
-import { useActiveBucket } from '../store/market-data-store'
+import { useActiveBucket, useMarketDataStore } from '../store/market-data-store'
 
 function Tile({
   label,
@@ -32,6 +32,7 @@ function Tile({
 
 export function StatsStrip() {
   const stats = useActiveBucket().stats
+  const activeSymbol = useMarketDataStore((state) => state.activeSymbol)
 
   const bid = stats?.bestBid ?? null
   const ask = stats?.bestAsk ?? null
@@ -43,7 +44,7 @@ export function StatsStrip() {
     <div className="flex items-stretch overflow-x-auto border-b border-[color:var(--color-border-strong)] bg-black">
       <div className="flex min-w-[7.2rem] flex-col justify-center border-r border-[color:var(--color-border-strong)] bg-[color:var(--color-bg-header)] px-2 py-[3px]">
         <span className="text-[9.5px] font-bold text-[color:var(--color-text-primary)]">Quote Monitor</span>
-        <span className="text-[10px] text-[color:var(--color-text-muted)]">SIM / L1</span>
+        <span className="text-[10px] text-[color:var(--color-text-muted)]">{activeSymbol || 'SIM'} / L1</span>
       </div>
       <Tile label="Bid" value={formatPrice(bid)} accent="buy" />
       <Tile label="Ask" value={formatPrice(ask)} accent="sell" />

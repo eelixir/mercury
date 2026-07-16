@@ -18,6 +18,7 @@
 #include "OrderNode.h"
 #include "IntrusiveList.h"
 #include <cstdint>
+#include <limits>
 
 namespace Mercury {
 
@@ -68,7 +69,9 @@ namespace Mercury {
          */
         void addOrder(OrderNode* node) {
             orders.push_back(node);
-            totalQuantity += node->quantity;
+            // Saturate rather than wrap on pathological sizes.
+            const uint64_t room = std::numeric_limits<uint64_t>::max() - totalQuantity;
+            totalQuantity += node->quantity > room ? room : node->quantity;
             ++orderCount;
         }
 
@@ -134,9 +137,12 @@ namespace Mercury {
             }
             if (node->quantity <= totalQuantity) {
                 totalQuantity -= node->quantity;
+            } else {
+                totalQuantity = 0;
             }
             node->quantity = newQuantity;
-            totalQuantity += newQuantity;
+            const uint64_t room = std::numeric_limits<uint64_t>::max() - totalQuantity;
+            totalQuantity += newQuantity > room ? room : newQuantity;
         }
 
         /**

@@ -5,6 +5,8 @@
 #include "MarketData.h"
 #include <functional>
 #include <atomic>
+#include <utility>
+#include <vector>
 
 namespace Mercury {
 
@@ -128,14 +130,24 @@ namespace Mercury {
          * @param trades Output vector for generated trades
          * @return True if any fills occurred
          */
-        bool matchOrder(Order& order, std::vector<Trade>& trades);
+        using PendingBookMutation = std::pair<Side, int64_t>;
+
+        bool matchOrder(Order& order, std::vector<Trade>& trades,
+                        bool deferCallbacks = false,
+                        std::vector<PendingBookMutation>* pendingMutations = nullptr);
 
         /**
          * Try to match against a single price level
          * @return Quantity filled at this level
          */
-        uint64_t matchAtPriceLevel(Order& order, int64_t priceLevel, 
-                                   std::vector<Trade>& trades);
+        uint64_t matchAtPriceLevel(Order& order, int64_t priceLevel,
+                                   std::vector<Trade>& trades,
+                                   bool deferCallbacks,
+                                   std::vector<PendingBookMutation>* pendingMutations);
+
+        /** Publish callbacks deferred while an atomic FOK match was committed. */
+        void flushDeferredMatchCallbacks(const std::vector<Trade>& trades,
+                                         const std::vector<PendingBookMutation>& mutations);
 
         /**
          * Check if a price is acceptable for matching
@@ -143,6 +155,13 @@ namespace Mercury {
          * Sell orders: priceLevel >= order.price (or market order)
          */
         bool isPriceAcceptable(const Order& order, int64_t priceLevel) const;
+
+        /**
+         * True if resting this limit would lock or cross the book.
+         * Used after STP-skipped matching so we never post marketable
+         * interest against remaining (own) opposite quotes.
+         */
+        bool wouldRestLockOrCross(const Order& order) const;
 
         /**
          * Generate a unique trade ID

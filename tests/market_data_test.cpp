@@ -5,7 +5,11 @@
 #include "OrderBook.h"
 
 #include <algorithm>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <mutex>
+#include <thread>
 #include <vector>
 
 using namespace Mercury;
@@ -140,4 +144,45 @@ TEST(MarketDataTest, EngineServicePublishesMarkToMarketPnLOnStatsUpdates) {
     EXPECT_EQ(clientOne->netPosition, 10);
     EXPECT_EQ(clientOne->unrealizedPnL, 200);
     EXPECT_EQ(clientOne->totalPnL, 200);
+}
+
+TEST(MarketDataTest, LoopingReplayOffsetsModifyTargetsWithOrderIds) {
+    const auto path = std::filesystem::temp_directory_path() /
+        ("mercury-replay-modify-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
+         ".csv");
+    {
+        std::ofstream out(path);
+        ASSERT_TRUE(out.is_open());
+        out << "id,timestamp,type,side,price,quantity,client_id\n";
+        out << "1,0,limit,buy,100,10,1\n";
+        out << "1,0,modify,buy,101,10,1\n";
+    }
+
+    EngineService service({"SIM"});
+    service.start();
+    ASSERT_TRUE(service.startReplay(path.string(), 1000.0, true, 5));
+
+    bool sawMultipleLoops = false;
+    L2Snapshot snapshot;
+    for (int i = 0; i < 100; ++i) {
+        const auto current = service.getSnapshot("SIM", 20);
+        if (current.bids.size() == 1 &&
+            current.bids.front().price == 101 &&
+            current.bids.front().quantity >= 30) {
+            sawMultipleLoops = true;
+            snapshot = current;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
+    service.stopReplay();
+    service.stop();
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+
+    ASSERT_TRUE(sawMultipleLoops);
+    ASSERT_EQ(snapshot.bids.size(), 1u);
+    EXPECT_EQ(snapshot.bids.front().price, 101);
 }

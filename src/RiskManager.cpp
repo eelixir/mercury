@@ -3,6 +3,7 @@
 #include <sstream>
 #include <cmath>
 #include <algorithm>
+#include <chrono>
 
 namespace Mercury {
 
@@ -55,6 +56,18 @@ namespace Mercury {
 
         // Check single order limits first (fastest checks)
         event = checkOrderLimits(order, limits);
+        if (event.isRejected()) {
+            event.eventId = generateEventId();
+            event.timestamp = getTimestamp();
+            event.orderId = order.id;
+            event.clientId = order.clientId;
+            rejectedCount_++;
+            notifyRiskEvent(event);
+            return event;
+        }
+
+        // Check order rate limits
+        event = checkOrderRateLimits(order, limits);
         if (event.isRejected()) {
             event.eventId = generateEventId();
             event.timestamp = getTimestamp();
@@ -131,7 +144,7 @@ namespace Mercury {
 
         // Check order value limit (for limit orders)
         if (order.orderType == OrderType::Limit && order.price > 0) {
-            int64_t orderValue = order.price * safeQuantityToInt64(order.quantity);
+            int64_t orderValue = safeMultiplyInt64(order.price, safeQuantityToInt64(order.quantity));
             if (orderValue > limits.maxOrderValue) {
                 event.eventType = RiskEventType::OrderValueLimitBreached;
                 event.currentValue = 0;
@@ -144,6 +157,38 @@ namespace Mercury {
             }
         }
 
+        return event;
+    }
+
+    RiskEvent RiskManager::checkOrderRateLimits(const Order& order, const RiskLimits& limits) {
+        RiskEvent event;
+        event.eventType = RiskEventType::Approved;
+
+        if (limits.maxOrdersPerSecond == 0) {
+            return event;
+        }
+
+        const auto nowMs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
+
+        auto& timestamps = orderTimestampsByClient_[order.clientId];
+        // Drop samples outside the rolling 1-second window.
+        while (!timestamps.empty() && nowMs >= timestamps.front() &&
+               (nowMs - timestamps.front()) >= 1000) {
+            timestamps.pop_front();
+        }
+
+        if (timestamps.size() >= limits.maxOrdersPerSecond) {
+            event.eventType = RiskEventType::OrderRateExceeded;
+            event.currentValue = static_cast<int64_t>(timestamps.size());
+            event.limitValue = static_cast<int64_t>(limits.maxOrdersPerSecond);
+            event.requestedValue = 1;
+            event.details = "Order rate limit exceeded";
+            return event;
+        }
+
+        timestamps.push_back(nowMs);
         return event;
     }
 
@@ -212,16 +257,16 @@ namespace Mercury {
             orderPrice = lastMarketPrice_;
         }
 
-        int64_t orderValue = orderPrice * safeQuantityToInt64(order.quantity);
+        int64_t orderValue = safeMultiplyInt64(orderPrice, safeQuantityToInt64(order.quantity));
 
         // Calculate current gross exposure (simplified: using position * avg price)
         // In a real system, this would use mark-to-market prices
         int64_t currentGrossExposure = 0;
         if (position.longPosition > 0 && position.avgBuyPrice > 0) {
-            currentGrossExposure += position.longPosition * position.avgBuyPrice;
+            currentGrossExposure += safeMultiplyInt64(position.longPosition, position.avgBuyPrice);
         }
         if (position.shortPosition > 0 && position.avgSellPrice > 0) {
-            currentGrossExposure += position.shortPosition * position.avgSellPrice;
+            currentGrossExposure += safeMultiplyInt64(position.shortPosition, position.avgSellPrice);
         }
 
         // Calculate potential gross exposure after order
@@ -243,10 +288,10 @@ namespace Mercury {
         // Calculate potential net exposure
         int64_t currentNetExposure = 0;
         if (position.longPosition > 0 && position.avgBuyPrice > 0) {
-            currentNetExposure += position.longPosition * position.avgBuyPrice;
+            currentNetExposure += safeMultiplyInt64(position.longPosition, position.avgBuyPrice);
         }
         if (position.shortPosition > 0 && position.avgSellPrice > 0) {
-            currentNetExposure -= position.shortPosition * position.avgSellPrice;
+            currentNetExposure -= safeMultiplyInt64(position.shortPosition, position.avgSellPrice);
         }
 
         int64_t potentialNetExposure = currentNetExposure;
@@ -424,6 +469,7 @@ namespace Mercury {
 
     void RiskManager::resetPositions() {
         clientPositions_.clear();
+        orderTimestampsByClient_.clear();
     }
 
     void RiskManager::resetDailyCounters() {
@@ -431,6 +477,7 @@ namespace Mercury {
             it.value().dailyOrderCount = 0;
             it.value().realizedPnL = 0;
         }
+        orderTimestampsByClient_.clear();
     }
 
     void RiskManager::notifyRiskEvent(const RiskEvent& event) {

@@ -71,8 +71,7 @@ TEST(OrderValidationTest, InvalidZeroPriceLimitOrder) {
     Order order = createOrder(1, Side::Buy, 0, 50);
     order.orderType = OrderType::Limit;
     
-    // Zero is not < 0, passes basic validation
-    EXPECT_EQ(order.validate(), RejectReason::None);
+    EXPECT_EQ(order.validate(), RejectReason::InvalidPrice);
 }
 
 TEST(OrderValidationTest, InvalidZeroQuantity) {

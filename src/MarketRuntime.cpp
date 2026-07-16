@@ -716,59 +716,107 @@ namespace Mercury {
         engineService_->setMarketDataSink(this);
     }
 
+    SimulationConfig MarketRuntime::copySimulationConfig() const {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        return simulationConfig_;
+    }
+
+    void MarketRuntime::cancelTrackedLiveOrders() {
+        std::vector<std::pair<std::string, uint64_t>> toCancel;
+        {
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            for (auto& [sym, env] : envs_) {
+                toCancel.reserve(toCancel.size() + env.liveOrdersById.size());
+                for (const auto& [orderId, record] : env.liveOrdersById) {
+                    (void) record;
+                    toCancel.emplace_back(sym, orderId);
+                }
+                env.liveOrdersById.clear();
+            }
+        }
+
+        if (!engineService_) {
+            return;
+        }
+
+        for (const auto& [sym, orderId] : toCancel) {
+            Order cancel;
+            cancel.id = orderId;
+            cancel.orderType = OrderType::Cancel;
+            cancel.side = Side::Buy;
+            engineService_->submitOrder(sym, cancel);
+        }
+    }
+
     void MarketRuntime::rebuildAgents() {
-        std::lock_guard<std::mutex> lock(agentsMutex_);
+        // Hold agentsMutex for the full rebuild so maybeWakeAgents cannot
+        // place new quotes between cancel and swap (orphan race).
+        std::lock_guard<std::mutex> agentsLock(agentsMutex_);
+
+        // Stop waking old agents immediately, then cancel their resting GTC.
         agentsBySymbol_.clear();
+        cancelTrackedLiveOrders();
+
+        const SimulationConfig cfg = copySimulationConfig();
+        const std::vector<AgentDescriptor> customFactories = customAgentFactories_;
+
+        std::unordered_map<std::string, std::vector<AgentSlot>> nextAgents;
 
         auto schedule = [this](uint64_t baseMs) {
             if (baseMs == 0) {
                 return uint64_t{0};
             }
+            // rng_ is only touched under stateMutex_ (same as advanceEnvironment).
+            // Lock order: agentsMutex_ (held by caller) then stateMutex_ — matches
+            // maybeWakeAgents (agents then state).
+            std::lock_guard<std::mutex> lock(stateMutex_);
             std::uniform_int_distribution<uint64_t> dist(0, baseMs / 2 + 1);
             return dist(rng_);
         };
 
         for (size_t symIdx = 0; symIdx < symbols_.size(); ++symIdx) {
             const auto& sym = symbols_[symIdx];
-            auto& agents = agentsBySymbol_[sym];
+            auto& agents = nextAgents[sym];
             const uint64_t symOffset = static_cast<uint64_t>(symIdx) * 10000;
 
-            for (size_t i = 0; i < simulationConfig_.marketMakerCount; ++i) {
+            for (size_t i = 0; i < cfg.marketMakerCount; ++i) {
                 auto agent = std::make_unique<PassiveMarketMakerAgent>(
-                    simulationConfig_.volatility,
-                    simulationConfig_.marketMaker);
+                    cfg.volatility,
+                    cfg.marketMaker);
                 const auto base = agent->wakeIntervalMs();
                 agents.push_back(AgentSlot{std::move(agent), symOffset + 1000 + static_cast<uint64_t>(i), schedule(base)});
             }
 
-            for (size_t i = 0; i < simulationConfig_.momentumCount; ++i) {
-                auto agent = std::make_unique<AggressiveMomentumAgent>(simulationConfig_.volatility);
+            for (size_t i = 0; i < cfg.momentumCount; ++i) {
+                auto agent = std::make_unique<AggressiveMomentumAgent>(cfg.volatility);
                 const auto base = agent->wakeIntervalMs();
                 agents.push_back(AgentSlot{std::move(agent), symOffset + 2000 + static_cast<uint64_t>(i), schedule(base)});
             }
 
-            for (size_t i = 0; i < simulationConfig_.meanReversionCount; ++i) {
-                auto agent = std::make_unique<MeanReversionAgent>(simulationConfig_.volatility);
+            for (size_t i = 0; i < cfg.meanReversionCount; ++i) {
+                auto agent = std::make_unique<MeanReversionAgent>(cfg.volatility);
                 const auto base = agent->wakeIntervalMs();
                 agents.push_back(AgentSlot{std::move(agent), symOffset + 3000 + static_cast<uint64_t>(i), schedule(base)});
             }
 
-            for (size_t i = 0; i < simulationConfig_.noiseTraderCount; ++i) {
+            for (size_t i = 0; i < cfg.noiseTraderCount; ++i) {
                 const uint32_t childSeed =
-                    static_cast<uint32_t>(simulationConfig_.seed) ^
+                    static_cast<uint32_t>(cfg.seed) ^
                     static_cast<uint32_t>((symIdx + 1) * 0x9E3779B1u) ^
                     static_cast<uint32_t>((i + 1) * 0x85EBCA77u);
-                auto agent = std::make_unique<PoissonFlowAgent>(simulationConfig_.volatility, childSeed);
+                auto agent = std::make_unique<PoissonFlowAgent>(cfg.volatility, childSeed);
                 const auto base = agent->wakeIntervalMs();
                 agents.push_back(AgentSlot{std::move(agent), symOffset + 4000 + static_cast<uint64_t>(i), schedule(base)});
             }
 
-            for (const auto& descriptor : customAgentFactories_) {
+            for (const auto& descriptor : customFactories) {
                 auto agent = descriptor.factory();
                 const auto base = agent->wakeIntervalMs();
                 agents.push_back(AgentSlot{std::move(agent), descriptor.clientId, schedule(base)});
             }
         }
+
+        agentsBySymbol_ = std::move(nextAgents);
     }
 
     void MarketRuntime::start() {
@@ -856,20 +904,20 @@ namespace Mercury {
         state.bidLevels = engineState.bidLevels;
         state.askLevels = engineState.askLevels;
         state.clientCount = engineState.clientCount;
-        state.simulationEnabled = simulationConfig_.enabled;
-        state.simulationRunning = simulationConfig_.enabled && running_.load();
         state.simulationPaused = simulationPaused_.load();
-        state.clockMode = simulationClockModeToString(simulationConfig_.clockMode);
-        state.simulationSpeed = simulationConfig_.speed;
-        state.volatilityPreset = simulationVolatilityToString(simulationConfig_.volatility);
-        state.marketMakerCount = simulationConfig_.marketMakerCount;
-        state.momentumCount = simulationConfig_.momentumCount;
-        state.meanReversionCount = simulationConfig_.meanReversionCount;
-        state.noiseTraderCount = simulationConfig_.noiseTraderCount;
-        state.marketMaker = simulationConfig_.marketMaker;
 
         {
             std::lock_guard<std::mutex> lock(stateMutex_);
+            state.simulationEnabled = simulationConfig_.enabled;
+            state.simulationRunning = simulationConfig_.enabled && running_.load();
+            state.clockMode = simulationClockModeToString(simulationConfig_.clockMode);
+            state.simulationSpeed = simulationConfig_.speed;
+            state.volatilityPreset = simulationVolatilityToString(simulationConfig_.volatility);
+            state.marketMakerCount = simulationConfig_.marketMakerCount;
+            state.momentumCount = simulationConfig_.momentumCount;
+            state.meanReversionCount = simulationConfig_.meanReversionCount;
+            state.noiseTraderCount = simulationConfig_.noiseTraderCount;
+            state.marketMaker = simulationConfig_.marketMaker;
             state.simulationTimestamp = simulationTimestampMs_;
             const auto& primarySym = symbols_.front();
             auto envIt = envs_.find(primarySym);
@@ -948,63 +996,73 @@ namespace Mercury {
     }
 
     bool MarketRuntime::applyControl(const SimulationControl& control) {
-        if (!simulationConfig_.enabled) {
-            return false;
-        }
-
-        auto applyScenario = [this](const std::string& scenario) {
-            if (scenario == "calm-two-sided-market") {
-                simulationConfig_.volatility = SimulationVolatilityPreset::Low;
-                simulationConfig_.marketMakerCount = 3;
-                simulationConfig_.momentumCount = 1;
-                simulationConfig_.meanReversionCount = 2;
-                simulationConfig_.noiseTraderCount = 1;
-                simulationConfig_.marketMaker = MarketMakerConfig{3, 140, 30, 2, 0.7, 150, 60};
-            } else if (scenario == "toxic-flow") {
-                simulationConfig_.volatility = SimulationVolatilityPreset::High;
-                simulationConfig_.marketMakerCount = 2;
-                simulationConfig_.momentumCount = 4;
-                simulationConfig_.meanReversionCount = 1;
-                simulationConfig_.noiseTraderCount = 4;
-                simulationConfig_.marketMaker = MarketMakerConfig{4, 80, 15, 5, 1.8, 70, 45};
-            } else if (scenario == "thin-book-stress") {
-                simulationConfig_.volatility = SimulationVolatilityPreset::High;
-                simulationConfig_.marketMakerCount = 1;
-                simulationConfig_.momentumCount = 3;
-                simulationConfig_.meanReversionCount = 1;
-                simulationConfig_.noiseTraderCount = 3;
-                simulationConfig_.marketMaker = MarketMakerConfig{2, 45, 10, 6, 1.4, 90, 40};
-            } else if (scenario == "high-cancel-rate") {
-                simulationConfig_.volatility = SimulationVolatilityPreset::Normal;
-                simulationConfig_.marketMakerCount = 3;
-                simulationConfig_.momentumCount = 1;
-                simulationConfig_.meanReversionCount = 2;
-                simulationConfig_.noiseTraderCount = 5;
-                simulationConfig_.marketMaker = MarketMakerConfig{3, 90, 20, 3, 1.1, 80, 50};
-            } else if (scenario == "momentum-burst") {
-                simulationConfig_.volatility = SimulationVolatilityPreset::High;
-                simulationConfig_.marketMakerCount = 2;
-                simulationConfig_.momentumCount = 5;
-                simulationConfig_.meanReversionCount = 1;
-                simulationConfig_.noiseTraderCount = 2;
-                simulationConfig_.marketMaker = MarketMakerConfig{4, 85, 15, 4, 1.3, 65, 45};
-            } else {
+        {
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            if (!simulationConfig_.enabled) {
                 return false;
             }
+        }
 
+        auto configureScenario = [](const std::string& scenario, SimulationConfig& cfg) -> bool {
+            if (scenario == "calm-two-sided-market") {
+                cfg.volatility = SimulationVolatilityPreset::Low;
+                cfg.marketMakerCount = 3;
+                cfg.momentumCount = 1;
+                cfg.meanReversionCount = 2;
+                cfg.noiseTraderCount = 1;
+                cfg.marketMaker = MarketMakerConfig{3, 140, 30, 2, 0.7, 150, 60};
+                return true;
+            }
+            if (scenario == "toxic-flow") {
+                cfg.volatility = SimulationVolatilityPreset::High;
+                cfg.marketMakerCount = 2;
+                cfg.momentumCount = 4;
+                cfg.meanReversionCount = 1;
+                cfg.noiseTraderCount = 4;
+                cfg.marketMaker = MarketMakerConfig{4, 80, 15, 5, 1.8, 70, 45};
+                return true;
+            }
+            if (scenario == "thin-book-stress") {
+                cfg.volatility = SimulationVolatilityPreset::High;
+                cfg.marketMakerCount = 1;
+                cfg.momentumCount = 3;
+                cfg.meanReversionCount = 1;
+                cfg.noiseTraderCount = 3;
+                cfg.marketMaker = MarketMakerConfig{2, 45, 10, 6, 1.4, 90, 40};
+                return true;
+            }
+            if (scenario == "high-cancel-rate") {
+                cfg.volatility = SimulationVolatilityPreset::Normal;
+                cfg.marketMakerCount = 3;
+                cfg.momentumCount = 1;
+                cfg.meanReversionCount = 2;
+                cfg.noiseTraderCount = 5;
+                cfg.marketMaker = MarketMakerConfig{3, 90, 20, 3, 1.1, 80, 50};
+                return true;
+            }
+            if (scenario == "momentum-burst") {
+                cfg.volatility = SimulationVolatilityPreset::High;
+                cfg.marketMakerCount = 2;
+                cfg.momentumCount = 5;
+                cfg.meanReversionCount = 1;
+                cfg.noiseTraderCount = 2;
+                cfg.marketMaker = MarketMakerConfig{4, 85, 15, 4, 1.3, 65, 45};
+                return true;
+            }
+            return false;
+        };
+
+        auto forceScenarioRegime = [this](const std::string& scenario) {
+            const bool stressed = scenario == "toxic-flow" ||
+                scenario == "thin-book-stress" ||
+                scenario == "high-cancel-rate" ||
+                scenario == "momentum-burst";
             std::lock_guard<std::mutex> lock(stateMutex_);
             for (auto& [sym, env] : envs_) {
+                (void) sym;
                 env.regime.setPreset(simulationConfig_.volatility);
-                if (scenario == "toxic-flow" ||
-                    scenario == "thin-book-stress" ||
-                    scenario == "high-cancel-rate" ||
-                    scenario == "momentum-burst") {
-                    env.regime.forceRegime(MarketRegime::Stressed);
-                } else {
-                    env.regime.forceRegime(MarketRegime::Calm);
-                }
+                env.regime.forceRegime(stressed ? MarketRegime::Stressed : MarketRegime::Calm);
             }
-            return true;
         };
 
         if (control.action == "pause") {
@@ -1032,10 +1090,13 @@ namespace Mercury {
                 return false;
             }
 
-            simulationConfig_.clockMode = requestedMode;
-            simulationConfig_.speed = requestedMode == SimulationClockMode::Realtime
-                ? 1.0
-                : std::clamp(control.speed, 0.1, 250.0);
+            {
+                std::lock_guard<std::mutex> lock(stateMutex_);
+                simulationConfig_.clockMode = requestedMode;
+                simulationConfig_.speed = requestedMode == SimulationClockMode::Realtime
+                    ? 1.0
+                    : std::clamp(control.speed, 0.1, 250.0);
+            }
             publishSimulationState(true);
             return true;
         }
@@ -1043,10 +1104,13 @@ namespace Mercury {
             if (!control.hasAgentCounts) {
                 return false;
             }
-            simulationConfig_.marketMakerCount = control.marketMakerCount;
-            simulationConfig_.momentumCount = control.momentumCount;
-            simulationConfig_.meanReversionCount = control.meanReversionCount;
-            simulationConfig_.noiseTraderCount = control.noiseTraderCount;
+            {
+                std::lock_guard<std::mutex> lock(stateMutex_);
+                simulationConfig_.marketMakerCount = control.marketMakerCount;
+                simulationConfig_.momentumCount = control.momentumCount;
+                simulationConfig_.meanReversionCount = control.meanReversionCount;
+                simulationConfig_.noiseTraderCount = control.noiseTraderCount;
+            }
             rebuildAgents();
             publishSimulationState(true);
             return true;
@@ -1055,25 +1119,38 @@ namespace Mercury {
             if (!control.hasMarketMakerConfig) {
                 return false;
             }
-            simulationConfig_.marketMaker = control.marketMaker;
-            rebuildAgents();
-            publishSimulationState(true);
-            return true;
-        }
-        if (control.action == "apply_scenario") {
-            if (!applyScenario(control.scenario)) {
-                return false;
+            {
+                std::lock_guard<std::mutex> lock(stateMutex_);
+                simulationConfig_.marketMaker = control.marketMaker;
             }
             rebuildAgents();
             publishSimulationState(true);
             return true;
         }
-        if (control.action == "set_volatility") {
-            simulationConfig_.volatility = simulationVolatilityFromString(control.volatility);
+        if (control.action == "apply_scenario") {
+            SimulationConfig next = copySimulationConfig();
+            if (!configureScenario(control.scenario, next)) {
+                return false;
+            }
             {
                 std::lock_guard<std::mutex> lock(stateMutex_);
+                simulationConfig_ = next;
+            }
+            // Clean book / PnL / fair-value state so the scenario starts fresh
+            // (unlike set_counts which only rebuilds agents).
+            restartRuntime();
+            forceScenarioRegime(control.scenario);
+            publishSimulationState(true);
+            return true;
+        }
+        if (control.action == "set_volatility") {
+            const auto preset = simulationVolatilityFromString(control.volatility);
+            {
+                std::lock_guard<std::mutex> lock(stateMutex_);
+                simulationConfig_.volatility = preset;
                 for (auto& [sym, env] : envs_) {
-                    env.regime.setPreset(simulationConfig_.volatility);
+                    (void) sym;
+                    env.regime.setPreset(preset);
                 }
             }
             rebuildAgents();
@@ -1085,6 +1162,7 @@ namespace Mercury {
             {
                 std::lock_guard<std::mutex> lock(stateMutex_);
                 for (auto& [sym, env] : envs_) {
+                    (void) sym;
                     env.regime.forceRegime(regime);
                 }
             }
@@ -1114,7 +1192,10 @@ namespace Mercury {
         if (!factory) {
             return;
         }
-        customAgentFactories_.push_back(AgentDescriptor{std::move(factory), clientId});
+        {
+            std::lock_guard<std::mutex> lock(agentsMutex_);
+            customAgentFactories_.push_back(AgentDescriptor{std::move(factory), clientId});
+        }
         rebuildAgents();
     }
 
@@ -1555,10 +1636,33 @@ namespace Mercury {
                 liveOrders.erase(order.id);
                 break;
             case OrderType::Cancel:
-                liveOrders.erase(order.id);
+                if (result.status == ExecutionStatus::Cancelled ||
+                    result.rejectReason == RejectReason::OrderNotFound) {
+                    liveOrders.erase(order.id);
+                }
+                // Rejected cancels leave tracking alone when status is unclear.
                 break;
             case OrderType::Modify:
-                if ((result.status == ExecutionStatus::Modified || result.status == ExecutionStatus::PartialFill) &&
+                // Pre-commit rejects (ModifyNoChanges, invalid fields) leave the
+                // resting order in the book — keep live tracking so agents do
+                // not stack duplicate quotes.
+                if (result.status == ExecutionStatus::Rejected) {
+                    if (result.rejectReason == RejectReason::ModifyNoChanges ||
+                        result.rejectReason == RejectReason::InvalidPrice ||
+                        result.rejectReason == RejectReason::InvalidOrderId ||
+                        result.rejectReason == RejectReason::OrderNotFound) {
+                        if (result.rejectReason == RejectReason::OrderNotFound) {
+                            liveOrders.erase(order.targetOrderId);
+                        }
+                        break;
+                    }
+                    // Post-commit failures (order already pulled): drop tracking.
+                    liveOrders.erase(order.targetOrderId);
+                    break;
+                }
+                if ((result.status == ExecutionStatus::Modified ||
+                     result.status == ExecutionStatus::PartialFill ||
+                     result.status == ExecutionStatus::Resting) &&
                     result.remainingQuantity > 0) {
                     const int64_t nextPrice = order.newPrice > 0 ? order.newPrice : order.price;
                     upsertLiveOrder(order.targetOrderId, order.side, nextPrice, result.remainingQuantity, order.clientId);
@@ -1684,71 +1788,95 @@ namespace Mercury {
                     recordAgentWake(sym, slot.clientId, slot.agent->name(), observation, intents, submittedCount);
 
                     const uint64_t baseWake = std::max<uint64_t>(1, slot.agent->wakeIntervalMs());
-                    std::uniform_int_distribution<uint64_t> dist(0, baseWake / 3 + 1);
-                    slot.nextWakeMs += baseWake + dist(rng_);
+                    uint64_t jitter = 0;
+                    {
+                        std::lock_guard<std::mutex> stateLock(stateMutex_);
+                        std::uniform_int_distribution<uint64_t> dist(0, baseWake / 3 + 1);
+                        jitter = dist(rng_);
+                    }
+                    slot.nextWakeMs += baseWake + jitter;
                     ++catchUpWakes;
                 }
 
                 if (currentSimTime >= slot.nextWakeMs) {
                     const uint64_t baseWake = std::max<uint64_t>(1, slot.agent->wakeIntervalMs());
-                    std::uniform_int_distribution<uint64_t> dist(baseWake / 4, baseWake / 2 + 1);
-                    slot.nextWakeMs = currentSimTime + dist(rng_);
+                    uint64_t jitter = 0;
+                    {
+                        std::lock_guard<std::mutex> stateLock(stateMutex_);
+                        std::uniform_int_distribution<uint64_t> dist(baseWake / 4, baseWake / 2 + 1);
+                        jitter = dist(rng_);
+                    }
+                    slot.nextWakeMs = currentSimTime + jitter;
                 }
             }
         }
     }
 
     void MarketRuntime::publishSimulationState(bool force) {
-        std::lock_guard<std::mutex> lock(stateMutex_);
+        // Build events under the state lock, then fan out unlocked so engine-
+        // thread market-data callbacks are not blocked on JSON/publish work.
+        std::vector<SimulationStateEvent> events;
+        {
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            events.reserve(symbols_.size());
 
-        for (const auto& sym : symbols_) {
-            auto& env = envs_[sym];
-            if (!force && simulationTimestampMs_ - env.lastSimStatePublishMs < simulationConfig_.publishIntervalMs) {
-                continue;
+            for (const auto& sym : symbols_) {
+                auto& env = envs_[sym];
+                if (!force && simulationTimestampMs_ - env.lastSimStatePublishMs < simulationConfig_.publishIntervalMs) {
+                    continue;
+                }
+                env.lastSimStatePublishMs = simulationTimestampMs_;
+
+                SimulationStateEvent event;
+                event.sequence = lastPublishedSequence_;
+                event.symbol = sym;
+                event.symbols = symbols_;
+                event.enabled = simulationConfig_.enabled;
+                event.running = running_.load();
+                event.paused = simulationPaused_.load();
+                event.clockMode = simulationClockModeToString(simulationConfig_.clockMode);
+                event.speed = simulationConfig_.speed;
+                event.volatility = simulationVolatilityToString(simulationConfig_.volatility);
+                event.simulationTimestamp = simulationTimestampMs_;
+                event.marketMakerCount = simulationConfig_.marketMakerCount;
+                event.momentumCount = simulationConfig_.momentumCount;
+                event.meanReversionCount = simulationConfig_.meanReversionCount;
+                event.noiseTraderCount = simulationConfig_.noiseTraderCount;
+                event.realizedVolatilityBps = env.realizedVolatilityBps;
+                event.averageSpread = env.averageSpread;
+                event.toxicityScore = env.toxicityScore;
+                const auto intensity = env.regime.intensity();
+                event.regime = marketRegimeToString(env.regime.regime());
+                event.limitLambda = intensity.limitLambda;
+                event.cancelLambda = intensity.cancelLambda;
+                event.marketableLambda = intensity.marketableLambda;
+                event.marketMakerLevels = simulationConfig_.marketMaker.levels;
+                event.marketMakerQuoteQuantity = simulationConfig_.marketMaker.quoteQuantity;
+                event.marketMakerMinQuantity = simulationConfig_.marketMaker.minQuantity;
+                event.marketMakerBaseSpreadTicks = simulationConfig_.marketMaker.baseSpreadTicks;
+                event.marketMakerToxicitySensitivity = simulationConfig_.marketMaker.toxicitySensitivity;
+                event.marketMakerWakeIntervalMs = simulationConfig_.marketMaker.wakeIntervalMs;
+                event.marketMakerInventorySkewDivisor = simulationConfig_.marketMaker.inventorySkewDivisor;
+                events.push_back(std::move(event));
             }
-            env.lastSimStatePublishMs = simulationTimestampMs_;
+        }
 
-            SimulationStateEvent event;
-            event.sequence = lastPublishedSequence_;
-            event.symbol = sym;
-            event.enabled = simulationConfig_.enabled;
-            event.running = running_.load();
-            event.paused = simulationPaused_.load();
-            event.clockMode = simulationClockModeToString(simulationConfig_.clockMode);
-            event.speed = simulationConfig_.speed;
-            event.volatility = simulationVolatilityToString(simulationConfig_.volatility);
-            event.simulationTimestamp = simulationTimestampMs_;
-            event.marketMakerCount = simulationConfig_.marketMakerCount;
-            event.momentumCount = simulationConfig_.momentumCount;
-            event.meanReversionCount = simulationConfig_.meanReversionCount;
-            event.noiseTraderCount = simulationConfig_.noiseTraderCount;
-            event.realizedVolatilityBps = env.realizedVolatilityBps;
-            event.averageSpread = env.averageSpread;
-            event.toxicityScore = env.toxicityScore;
-            const auto intensity = env.regime.intensity();
-            event.regime = marketRegimeToString(env.regime.regime());
-            event.limitLambda = intensity.limitLambda;
-            event.cancelLambda = intensity.cancelLambda;
-            event.marketableLambda = intensity.marketableLambda;
-            event.marketMakerLevels = simulationConfig_.marketMaker.levels;
-            event.marketMakerQuoteQuantity = simulationConfig_.marketMaker.quoteQuantity;
-            event.marketMakerMinQuantity = simulationConfig_.marketMaker.minQuantity;
-            event.marketMakerBaseSpreadTicks = simulationConfig_.marketMaker.baseSpreadTicks;
-            event.marketMakerToxicitySensitivity = simulationConfig_.marketMaker.toxicitySensitivity;
-            event.marketMakerWakeIntervalMs = simulationConfig_.marketMaker.wakeIntervalMs;
-            event.marketMakerInventorySkewDivisor = simulationConfig_.marketMaker.inventorySkewDivisor;
-
+        for (const auto& event : events) {
             fanout([&](MarketDataSink* sink) { sink->onSimulationState(event); });
         }
     }
 
     void MarketRuntime::simulationLoop() {
-        const uint64_t stepMs = std::max<uint64_t>(20, simulationConfig_.stepMs);
         while (!stopRequested_.load()) {
             if (simulationPaused_.load()) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(20));
                 continue;
             }
+
+            // Snapshot pacing config under the state mutex so HTTP control
+            // threads cannot tear multi-field updates mid-step.
+            const SimulationConfig cfg = copySimulationConfig();
+            const uint64_t stepMs = std::max<uint64_t>(20, cfg.stepMs);
 
             {
                 std::lock_guard<std::mutex> lock(stateMutex_);
@@ -1761,11 +1889,11 @@ namespace Mercury {
             maybeWakeAgents();
             publishSimulationState(false);
 
-            const double speed = std::max(0.1, simulationConfig_.speed);
+            const double speed = std::max(0.1, cfg.speed);
             uint64_t realSleepMs = stepMs;
-            if (simulationConfig_.clockMode == SimulationClockMode::Accelerated) {
+            if (cfg.clockMode == SimulationClockMode::Accelerated) {
                 realSleepMs = static_cast<uint64_t>(std::max(1.0, std::round(static_cast<double>(stepMs) / speed)));
-            } else if (simulationConfig_.clockMode == SimulationClockMode::Instant) {
+            } else if (cfg.clockMode == SimulationClockMode::Instant) {
                 realSleepMs = 0;
             }
 

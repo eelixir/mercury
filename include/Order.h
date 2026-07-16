@@ -127,7 +127,8 @@ namespace Mercury {
                     if (quantity == 0) {
                         return RejectReason::InvalidQuantity;
                     }
-                    if (price < 0) {
+                    // Limit orders require a strictly positive price.
+                    if (price <= 0) {
                         return RejectReason::InvalidPrice;
                     }
                     // Check for unreasonable prices (configurable limit)

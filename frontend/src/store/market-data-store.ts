@@ -12,6 +12,8 @@ import type {
 } from '../lib/types'
 
 const MAX_TRADES = 120
+/** Initial snapshot depth requested by the WebSocket client. */
+const MAX_BOOK_DEPTH = 20
 
 export interface ChartPoint {
   timestamp: number
@@ -80,6 +82,8 @@ interface MarketDataState {
   setLastOrderResponse: (response: OrderResponse | null) => void
   trackOrderId: (orderId: number) => void
   applyEnvelope: (envelope: MarketEnvelope) => void
+  /** Clear market sequences so the next snapshot is always accepted (WS resync). */
+  prepareResync: () => void
   reset: () => void
 }
 
@@ -90,7 +94,44 @@ function upsertLevel(levels: BookLevel[], nextLevel: BookLevel, descending: bool
   }
 
   filtered.sort((left, right) => (descending ? right.price - left.price : left.price - right.price))
+  // Keep every active level learned from the delta stream. Trimming a live
+  // level is lossy because the server will not resend it merely because a
+  // better level was later removed.
   return filtered
+}
+
+function restingOrderCount(bids: BookLevel[], asks: BookLevel[]): number {
+  return (
+    bids.reduce((sum, level) => sum + (level.orderCount || 0), 0) +
+    asks.reduce((sum, level) => sum + (level.orderCount || 0), 0)
+  )
+}
+
+/** Expected client IDs for built-in agents given counts (mirrors MarketRuntime). */
+function expectedAgentClientIds(payload: SimulationStatePayload): Set<number> {
+  const ids = new Set<number>()
+  for (let i = 0; i < (payload.marketMakerCount ?? 0); i += 1) ids.add(1000 + i)
+  for (let i = 0; i < (payload.momentumCount ?? 0); i += 1) ids.add(2000 + i)
+  for (let i = 0; i < (payload.meanReversionCount ?? 0); i += 1) ids.add(3000 + i)
+  for (let i = 0; i < (payload.noiseTraderCount ?? 0); i += 1) ids.add(4000 + i)
+  return ids
+}
+
+function pruneAgentMetrics(
+  metrics: Record<number, AgentMetricsPayload>,
+  allowed: Set<number>,
+): Record<number, AgentMetricsPayload> {
+  const next: Record<number, AgentMetricsPayload> = {}
+  for (const [key, value] of Object.entries(metrics)) {
+    const clientId = Number(key)
+    // Keep custom agents (outside 1000-4999 built-in bands) and live slots.
+    const local = clientId % 10000
+    const isBuiltinBand = local >= 1000 && local < 5000
+    if (!isBuiltinBand || allowed.has(local) || allowed.has(clientId)) {
+      next[clientId] = value
+    }
+  }
+  return next
 }
 
 function ensureSymbol(
@@ -201,6 +242,25 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
       return { submittedOrderIds: next }
     })
   },
+  prepareResync: () =>
+    set((state) => {
+      const cleared: Record<string, SymbolBucket> = {}
+      for (const symbol of state.symbols) {
+        const existing = state.bySymbol[symbol] ?? newBucket()
+        cleared[symbol] = {
+          ...newBucket(),
+          // Keep non-book UI state across a reconnect resync boundary.
+          simulation: existing.simulation,
+          agentMetricsByClient: existing.agentMetricsByClient,
+          pnlByClient: existing.pnlByClient,
+          chartPoints: existing.chartPoints,
+        }
+      }
+      return {
+        streamSequence: 0,
+        bySymbol: cleared,
+      }
+    }),
   reset: () =>
     set({
       activeSymbol: 'SIM',
@@ -223,8 +283,16 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
       envelope.type === 'trade' ||
       envelope.type === 'stats'
 
+    // Snapshots are authoritative resync points: always apply them, even when
+    // sequence matches the last frame (server reuses currentSequence_) or
+    // restarts from a lower sequence after process restart.
+    //
+    // Forward gaps are accepted: non-market frames share the global sequence,
+    // so a jump does not imply a lost book_delta. Never drop market frames on
+    // gap — that froze the live ladder until an opportunistic reconnect.
     const symbolSequence = state.bySymbol[symbol]?.sequence ?? 0
     if (
+      envelope.type !== 'snapshot' &&
       updatesMarketSequence &&
       state.streamSequence !== 0 &&
       envelope.sequence <= state.streamSequence &&
@@ -247,12 +315,14 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
       }
 
       if (envelope.type === 'snapshot') {
+        const bids = envelope.payload.bids.slice(0, MAX_BOOK_DEPTH)
+        const asks = envelope.payload.asks.slice(0, MAX_BOOK_DEPTH)
         const nextStats: StatsPayload = {
           tradeCount: bucket.stats?.tradeCount ?? 0,
           totalVolume: bucket.stats?.totalVolume ?? 0,
-          orderCount: envelope.payload.bids.length + envelope.payload.asks.length,
-          bidLevels: envelope.payload.bids.length,
-          askLevels: envelope.payload.asks.length,
+          orderCount: restingOrderCount(bids, asks),
+          bidLevels: bids.length,
+          askLevels: asks.length,
           bestBid: envelope.payload.bestBid,
           bestAsk: envelope.payload.bestAsk,
           spread: envelope.payload.spread,
@@ -267,13 +337,15 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
 
         return {
           symbols: ensured.symbols,
-          streamSequence,
+          streamSequence: Math.max(streamSequence, envelope.sequence),
           bySymbol: updateBucket(ensured.bySymbol, symbol, {
             sequence: envelope.sequence,
-            bids: envelope.payload.bids,
-            asks: envelope.payload.asks,
+            bids,
+            asks,
+            trades: [],
             stats: nextStats,
             chartPoints: nextChartPoints,
+            engineLatencyNs: null,
           }),
           ...(activePatch ?? {}),
         }
@@ -292,19 +364,22 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
             ? { engineLatencyNs: envelope.payload.engineLatencyNs }
             : {}
 
+        const nextBids =
+          envelope.payload.side === 'buy'
+            ? upsertLevel(bucket.bids, nextLevel, true)
+            : bucket.bids
+        const nextAsks =
+          envelope.payload.side === 'sell'
+            ? upsertLevel(bucket.asks, nextLevel, false)
+            : bucket.asks
+
         return {
           symbols: ensured.symbols,
           streamSequence,
           bySymbol: updateBucket(ensured.bySymbol, symbol, {
             sequence: Math.max(bucket.sequence, envelope.sequence),
-            bids:
-              envelope.payload.side === 'buy'
-                ? upsertLevel(bucket.bids, nextLevel, true)
-                : bucket.bids,
-            asks:
-              envelope.payload.side === 'sell'
-                ? upsertLevel(bucket.asks, nextLevel, false)
-                : bucket.asks,
+            bids: nextBids,
+            asks: nextAsks,
             ...latencyUpdate,
           }),
           ...(activePatch ?? {}),
@@ -397,11 +472,14 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
           }
         }
 
+        const allowedAgents = expectedAgentClientIds(envelope.payload)
+        const currentMetrics = nextBySymbol[symbol]?.agentMetricsByClient ?? bucket.agentMetricsByClient
         return {
           symbols: nextSymbols,
           bySymbol: updateBucket(nextBySymbol, symbol, {
             sequence: Math.max(bucket.sequence, envelope.sequence),
             simulation: envelope.payload,
+            agentMetricsByClient: pruneAgentMetrics(currentMetrics, allowedAgents),
           }),
           ...(nextActivePatch ?? {}),
         }
@@ -422,10 +500,35 @@ export const useMarketDataStore = create<MarketDataState>((set, get) => ({
       }
 
       if (envelope.type === 'execution') {
+        // Only surface executions for orders this UI submitted — agent and
+        // other-client fills must not overwrite the manual order result panel.
+        const exec = envelope.payload
+        if (!prev.submittedOrderIds.has(exec.orderId)) {
+          return {
+            symbols: ensured.symbols,
+            streamSequence,
+            bySymbol: ensured.bySymbol,
+            ...(activePatch ?? {}),
+          }
+        }
+        const asResponse: OrderResponse = {
+          submittedOrderId: exec.orderId,
+          orderType: 'limit',
+          side: 'buy',
+          tif: 'GTC',
+          status: exec.status,
+          rejectReason: exec.rejectReason,
+          orderId: exec.orderId,
+          filledQuantity: exec.filledQuantity,
+          remainingQuantity: exec.remainingQuantity,
+          message: exec.rejectReason || exec.status,
+          trades: [],
+        }
         return {
           symbols: ensured.symbols,
           streamSequence,
           bySymbol: ensured.bySymbol,
+          lastOrderResponse: asResponse,
           ...(activePatch ?? {}),
         }
       }

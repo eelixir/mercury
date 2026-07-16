@@ -310,6 +310,83 @@ TEST_F(MatchingEngineTest, FOKOrderWithMultipleLevels) {
     EXPECT_EQ(result.filledQuantity, 60);
 }
 
+TEST_F(MatchingEngineTest, FOKRejectsWhenOnlyOwnLiquidityAtBest) {
+    Order ownSell = makeLimitOrder(1, Side::Sell, 100, 50);
+    ownSell.clientId = 42;
+    ASSERT_EQ(engine.submitOrder(ownSell).status, ExecutionStatus::Resting);
+
+    Order fokBuy = makeLimitOrder(2, Side::Buy, 100, 50, TimeInForce::FOK);
+    fokBuy.clientId = 42;
+    auto result = engine.submitOrder(fokBuy);
+
+    EXPECT_EQ(result.status, ExecutionStatus::Rejected);
+    EXPECT_EQ(result.rejectReason, RejectReason::FOKCannotFill);
+    EXPECT_EQ(result.filledQuantity, 0u);
+    EXPECT_FALSE(engine.getOrderBook().hasOrder(2));
+    EXPECT_TRUE(engine.getOrderBook().hasOrder(1));
+}
+
+TEST_F(MatchingEngineTest, FOKRejectsWhenOwnSizeBlocksFullFill) {
+    Order ownSell = makeLimitOrder(1, Side::Sell, 100, 30);
+    ownSell.clientId = 42;
+    ASSERT_EQ(engine.submitOrder(ownSell).status, ExecutionStatus::Resting);
+
+    Order otherSell = makeLimitOrder(2, Side::Sell, 100, 30);
+    otherSell.clientId = 43;
+    ASSERT_EQ(engine.submitOrder(otherSell).status, ExecutionStatus::Resting);
+
+    // Needs 50 but only 30 is executable under STP.
+    Order fokBuy = makeLimitOrder(3, Side::Buy, 100, 50, TimeInForce::FOK);
+    fokBuy.clientId = 42;
+    auto result = engine.submitOrder(fokBuy);
+
+    EXPECT_EQ(result.status, ExecutionStatus::Rejected);
+    EXPECT_EQ(result.rejectReason, RejectReason::FOKCannotFill);
+    EXPECT_EQ(result.filledQuantity, 0u);
+    EXPECT_TRUE(engine.getOrderBook().hasOrder(1));
+    EXPECT_TRUE(engine.getOrderBook().hasOrder(2));
+}
+
+TEST_F(MatchingEngineTest, FOKCommitsBeforeTradeCallbacksCanChangeLiquidity) {
+    ASSERT_EQ(engine.submitOrder(makeLimitOrder(1, Side::Sell, 100, 30)).status,
+              ExecutionStatus::Resting);
+    ASSERT_EQ(engine.submitOrder(makeLimitOrder(2, Side::Sell, 101, 30)).status,
+              ExecutionStatus::Resting);
+
+    size_t callbackCount = 0;
+    engine.setTradeCallback([&](const Trade&) {
+        ++callbackCount;
+        // If callbacks fired during matching, this would remove liquidity that
+        // the accepted FOK still needs. Atomic FOK dispatches only after commit.
+        engine.cancelOrder(2);
+    });
+
+    auto result = engine.submitOrder(
+        makeLimitOrder(3, Side::Buy, 101, 60, TimeInForce::FOK));
+
+    EXPECT_EQ(result.status, ExecutionStatus::Filled);
+    EXPECT_EQ(result.filledQuantity, 60u);
+    EXPECT_EQ(result.remainingQuantity, 0u);
+    EXPECT_EQ(result.trades.size(), 2u);
+    EXPECT_EQ(callbackCount, 2u);
+    EXPECT_FALSE(engine.getOrderBook().hasOrder(1));
+    EXPECT_FALSE(engine.getOrderBook().hasOrder(2));
+}
+
+TEST_F(MatchingEngineTest, TradeCallbackObservesPostMutationRestingState) {
+    ASSERT_EQ(engine.submitOrder(makeLimitOrder(1, Side::Sell, 100, 10)).status,
+              ExecutionStatus::Resting);
+
+    bool restingGoneInCallback = false;
+    engine.setTradeCallback([&](const Trade& trade) {
+        restingGoneInCallback = !engine.getOrderBook().hasOrder(trade.sellOrderId);
+    });
+
+    ASSERT_EQ(engine.submitOrder(makeLimitOrder(2, Side::Buy, 100, 10)).status,
+              ExecutionStatus::Filled);
+    EXPECT_TRUE(restingGoneInCallback);
+}
+
 TEST_F(MatchingEngineTest, GTCOrderRestsInBook) {
     engine.submitOrder(makeLimitOrder(1, Side::Sell, 105, 50));
     auto result = engine.submitOrder(makeLimitOrder(2, Side::Buy, 100, 50, TimeInForce::GTC));
@@ -404,7 +481,7 @@ TEST_F(MatchingEngineTest, TradeCallbackInvoked) {
 
 // ============== Self-Trade Prevention Tests ==============
 
-TEST_F(MatchingEngineTest, SelfTradePreventionSkipsOwnOrders) {
+TEST_F(MatchingEngineTest, SelfTradePreventionRejectsLockingRest) {
     Order sell = makeLimitOrder(1, Side::Sell, 100, 50);
     sell.clientId = 42;
     engine.submitOrder(sell);
@@ -413,8 +490,53 @@ TEST_F(MatchingEngineTest, SelfTradePreventionSkipsOwnOrders) {
     buy.clientId = 42;  // Same client
     auto result = engine.submitOrder(buy);
 
-    EXPECT_EQ(result.status, ExecutionStatus::Resting);  // No match due to STP
+    // Must not rest opposite own quotes (locked book).
+    EXPECT_EQ(result.status, ExecutionStatus::Rejected);
+    EXPECT_EQ(result.rejectReason, RejectReason::SelfTradePrevention);
     EXPECT_EQ(result.filledQuantity, 0);
+    EXPECT_FALSE(engine.getOrderBook().hasOrder(2));
+    EXPECT_TRUE(engine.getOrderBook().hasOrder(1));
+    EXPECT_LT(engine.getOrderBook().getBestBid(), engine.getOrderBook().getBestAsk());
+}
+
+TEST_F(MatchingEngineTest, SelfTradePreventionRejectsCrossingRest) {
+    Order sell = makeLimitOrder(1, Side::Sell, 100, 50);
+    sell.clientId = 42;
+    ASSERT_EQ(engine.submitOrder(sell).status, ExecutionStatus::Resting);
+
+    Order buy = makeLimitOrder(2, Side::Buy, 105, 50);
+    buy.clientId = 42;
+    auto result = engine.submitOrder(buy);
+
+    EXPECT_EQ(result.status, ExecutionStatus::Rejected);
+    EXPECT_EQ(result.rejectReason, RejectReason::SelfTradePrevention);
+    EXPECT_EQ(result.filledQuantity, 0);
+    EXPECT_FALSE(engine.getOrderBook().hasOrder(2));
+    // Original ask remains; book must not be crossed.
+    EXPECT_EQ(engine.getOrderBook().getBestAsk(), 100);
+    EXPECT_FALSE(engine.getOrderBook().hasBids());
+}
+
+TEST_F(MatchingEngineTest, SelfTradePreventionWalksPastOwnLevel) {
+    Order ownSell = makeLimitOrder(1, Side::Sell, 100, 50);
+    ownSell.clientId = 42;
+    ASSERT_EQ(engine.submitOrder(ownSell).status, ExecutionStatus::Resting);
+
+    Order otherSell = makeLimitOrder(2, Side::Sell, 101, 40);
+    otherSell.clientId = 43;
+    ASSERT_EQ(engine.submitOrder(otherSell).status, ExecutionStatus::Resting);
+
+    Order buy = makeLimitOrder(3, Side::Buy, 101, 40);
+    buy.clientId = 42;
+    auto result = engine.submitOrder(buy);
+
+    EXPECT_EQ(result.status, ExecutionStatus::Filled);
+    EXPECT_EQ(result.filledQuantity, 40);
+    ASSERT_EQ(capturedTrades.size(), 1u);
+    EXPECT_EQ(capturedTrades[0].sellOrderId, 2u);
+    EXPECT_EQ(capturedTrades[0].price, 101);
+    EXPECT_TRUE(engine.getOrderBook().hasOrder(1));
+    EXPECT_FALSE(engine.getOrderBook().hasOrder(2));
 }
 
 TEST_F(MatchingEngineTest, SelfTradePreventionMatchesDifferentClients) {
@@ -428,6 +550,54 @@ TEST_F(MatchingEngineTest, SelfTradePreventionMatchesDifferentClients) {
 
     EXPECT_EQ(result.status, ExecutionStatus::Filled);
     EXPECT_EQ(result.filledQuantity, 50);
+}
+
+TEST_F(MatchingEngineTest, CancelOneOfManyPublishesUpsertNotRemove) {
+    std::vector<BookMutation> mutations;
+    engine.setBookMutationCallback([&](const BookMutation& m) {
+        mutations.push_back(m);
+    });
+
+    ASSERT_EQ(engine.submitOrder(makeLimitOrder(1, Side::Buy, 100, 10)).status,
+              ExecutionStatus::Resting);
+    ASSERT_EQ(engine.submitOrder(makeLimitOrder(2, Side::Buy, 100, 20)).status,
+              ExecutionStatus::Resting);
+    mutations.clear();
+
+    auto cancel = makeLimitOrder(3, Side::Buy, 0, 0);
+    cancel.orderType = OrderType::Cancel;
+    cancel.id = 1;
+    ASSERT_EQ(engine.submitOrder(cancel).status, ExecutionStatus::Cancelled);
+
+    ASSERT_FALSE(mutations.empty());
+    const auto& last = mutations.back();
+    EXPECT_EQ(last.price, 100);
+    EXPECT_EQ(last.action, BookDeltaAction::Upsert);
+    EXPECT_EQ(last.quantity, 20u);
+    EXPECT_EQ(last.orderCount, 1u);
+}
+
+TEST_F(MatchingEngineTest, FullFillOfLastOrderAtLevelPublishesRemove) {
+    std::vector<BookMutation> mutations;
+    engine.setBookMutationCallback([&](const BookMutation& m) {
+        mutations.push_back(m);
+    });
+
+    ASSERT_EQ(engine.submitOrder(makeLimitOrder(1, Side::Sell, 100, 10)).status,
+              ExecutionStatus::Resting);
+    mutations.clear();
+
+    ASSERT_EQ(engine.submitOrder(makeLimitOrder(2, Side::Buy, 100, 10)).status,
+              ExecutionStatus::Filled);
+
+    bool sawRemove = false;
+    for (const auto& m : mutations) {
+        if (m.price == 100 && m.side == Side::Sell && m.action == BookDeltaAction::Remove) {
+            sawRemove = true;
+            EXPECT_EQ(m.quantity, 0u);
+        }
+    }
+    EXPECT_TRUE(sawRemove);
 }
 
 // ============== Statistics Tests ==============

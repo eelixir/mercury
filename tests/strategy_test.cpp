@@ -107,6 +107,32 @@ TEST_F(MarketMakingStrategyTest, GeneratesBothSidesQuotes) {
     EXPECT_TRUE(hasSell);
 }
 
+TEST_F(MarketMakingStrategyTest, RequotesAfterAcknowledgedQuoteCloses) {
+    MarketMakingStrategy strategy(config);
+    MarketTick tick = createTick(100, 104);
+
+    const auto initial = strategy.onMarketTick(tick);
+    auto bid = std::find_if(initial.begin(), initial.end(), [](const StrategySignal& signal) {
+        return signal.type == SignalType::Buy;
+    });
+    ASSERT_NE(bid, initial.end());
+
+    strategy.onQuoteRested(Side::Buy, bid->price, bid->quantity);
+    strategy.onQuoteRested(Side::Sell, bid->price + config.minSpread, bid->quantity);
+    tick.timestamp = 2;
+    const auto suppressed = strategy.onMarketTick(tick);
+    EXPECT_TRUE(std::none_of(suppressed.begin(), suppressed.end(), [](const StrategySignal& signal) {
+        return signal.type == SignalType::Buy;
+    }));
+
+    strategy.onQuoteClosed(Side::Buy);
+    tick.timestamp = 3;
+    const auto replenished = strategy.onMarketTick(tick);
+    EXPECT_TRUE(std::any_of(replenished.begin(), replenished.end(), [](const StrategySignal& signal) {
+        return signal.type == SignalType::Buy;
+    }));
+}
+
 TEST_F(MarketMakingStrategyTest, RespectsMinSpread) {
     MarketMakingStrategy strategy(config);
     MarketTick tick = createTick(100, 101);  // Very tight market
@@ -126,8 +152,8 @@ TEST_F(MarketMakingStrategyTest, RespectsMinSpread) {
 TEST_F(MarketMakingStrategyTest, InventorySkewReducesBidWhenLong) {
     MarketMakingStrategy strategy(config);
     
-    // Set long position
-    strategy.updatePosition(Side::Buy, 200, 100);
+    // Set long position (direct inventory helper — manager owns live path)
+    strategy.setInventoryForTest(Side::Buy, 200, 100);
     
     MarketTick tick = createTick(100, 104);
     auto signals = strategy.onMarketTick(tick);
@@ -146,7 +172,7 @@ TEST_F(MarketMakingStrategyTest, StopsQuotingAtMaxInventory) {
     
     // Set position at max
     for (int i = 0; i < 10; i++) {
-        strategy.updatePosition(Side::Buy, 10, 100);
+        strategy.setInventoryForTest(Side::Buy, 10, 100);
     }
     
     MarketTick tick = createTick(100, 104);
@@ -176,7 +202,7 @@ TEST_F(MarketMakingStrategyTest, DisabledStrategyNoSignals) {
 TEST_F(MarketMakingStrategyTest, ResetClearsState) {
     MarketMakingStrategy strategy(config);
     
-    strategy.updatePosition(Side::Buy, 100, 100);
+    strategy.setInventoryForTest(Side::Buy, 100, 100);
     EXPECT_EQ(strategy.getState().netPosition, 100);
     
     strategy.reset();
@@ -514,6 +540,59 @@ TEST_F(StrategyManagerTest, CancelAllOrders) {
     
     // Subsequent cancels should be no-op
     manager.cancelAllOrders();
+}
+
+TEST_F(StrategyManagerTest, RestingFillReleasesRiskSlotAndReplenishesQuote) {
+    RiskManager riskManager;
+    StrategyManager manager(engine, riskManager);
+
+    MarketMakingConfig mmConfig;
+    mmConfig.quoteQuantity = 20;
+    mmConfig.requoteInterval = 100000;
+    auto mm = std::make_unique<MarketMakingStrategy>(mmConfig);
+    auto* mmPtr = mm.get();
+    manager.addStrategy(std::move(mm));
+
+    MarketTick tick = manager.createTickFromOrderBook();
+    tick.timestamp = 1;
+    manager.onMarketTick(tick);
+    ASSERT_EQ(riskManager.getClientPosition(100).openOrderCount, 2u);
+
+    const int64_t bidPrice = mmPtr->getLastBidPrice();
+    ASSERT_GT(bidPrice, 0);
+    const auto* bidLevel = engine.getOrderBook().getBidLevel(bidPrice);
+    ASSERT_NE(bidLevel, nullptr);
+
+    uint64_t sweepQuantity = 0;
+    bool foundStrategyBid = false;
+    for (const auto& [price, level] : engine.getOrderBook().getBidLevels()) {
+        if (price < bidPrice) {
+            break;
+        }
+        sweepQuantity += level.totalQuantity;
+        for (const auto& node : level) {
+            foundStrategyBid = foundStrategyBid || node.clientId == 100;
+        }
+    }
+    ASSERT_TRUE(foundStrategyBid);
+    ASSERT_GT(sweepQuantity, 0u);
+
+    Order sweep;
+    sweep.id = 9000;
+    sweep.orderType = OrderType::Market;
+    sweep.side = Side::Sell;
+    sweep.quantity = sweepQuantity;
+    sweep.clientId = 999;
+    sweep.tif = TimeInForce::IOC;
+    ASSERT_EQ(engine.submitOrder(sweep).status, ExecutionStatus::Filled);
+
+    EXPECT_EQ(riskManager.getClientPosition(100).openOrderCount, 1u);
+    EXPECT_EQ(mmPtr->getLastBidPrice(), 0);
+
+    tick.timestamp = 2;
+    manager.onMarketTick(tick);
+    EXPECT_EQ(riskManager.getClientPosition(100).openOrderCount, 2u);
+    EXPECT_GT(mmPtr->getLastBidPrice(), 0);
 }
 
 // ============== Signal Callback Tests ==============

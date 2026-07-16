@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -161,6 +162,7 @@ namespace Mercury {
                 SimulationStateEvent event;
                 event.sequence = state.sequence;
                 event.symbol = sym; // Use the specific symbol
+                event.symbols = state.symbols;
                 event.enabled = state.simulationEnabled;
                 event.running = state.simulationRunning;
                 event.paused = state.simulationPaused;
@@ -227,12 +229,17 @@ namespace Mercury {
 
         app.post("/api/simulation/control", [&runtime](auto* res, auto* /*req*/) {
             auto body = std::make_shared<std::string>();
+            auto aborted = std::make_shared<std::atomic<bool>>(false);
 
-            res->onAborted([body]() {
-                (void) body;
+            res->onAborted([aborted]() {
+                aborted->store(true, std::memory_order_release);
             });
 
-            res->onData([body, res, &runtime](std::string_view chunk, bool isLast) {
+            res->onData([body, aborted, res, &runtime](std::string_view chunk, bool isLast) {
+                if (aborted->load(std::memory_order_acquire)) {
+                    return;
+                }
+
                 body->append(chunk.data(), chunk.size());
                 if (!isLast) {
                     return;
@@ -278,19 +285,19 @@ namespace Mercury {
                     }
 
                     if (!runtime.applyControl(control)) {
-                        writeJson(res, "400 Bad Request", json{
+                        writeJsonIfOpen(res, aborted, "400 Bad Request", json{
                             {"error", "invalid_control"},
                             {"message", "Unsupported simulation control action"}
                         });
                         return;
                     }
 
-                    writeJson(res, "200 OK", json{
+                    writeJsonIfOpen(res, aborted, "200 OK", json{
                         {"status", "ok"},
                         {"simulation", stateToJson(runtime.getState(), 0)["simulation"]}
                     });
                 } catch (const std::exception& ex) {
-                    writeJson(res, "400 Bad Request", json{
+                    writeJsonIfOpen(res, aborted, "400 Bad Request", json{
                         {"error", "invalid_request"},
                         {"message", ex.what()}
                     });
@@ -300,12 +307,17 @@ namespace Mercury {
 
         app.post("/api/replay/control", [&runtime](auto* res, auto* /*req*/) {
             auto body = std::make_shared<std::string>();
+            auto aborted = std::make_shared<std::atomic<bool>>(false);
 
-            res->onAborted([body]() {
-                (void) body;
+            res->onAborted([aborted]() {
+                aborted->store(true, std::memory_order_release);
             });
 
-            res->onData([body, res, &runtime](std::string_view chunk, bool isLast) {
+            res->onData([body, aborted, res, &runtime](std::string_view chunk, bool isLast) {
+                if (aborted->load(std::memory_order_acquire)) {
+                    return;
+                }
+
                 body->append(chunk.data(), chunk.size());
                 if (!isLast) {
                     return;
@@ -317,7 +329,7 @@ namespace Mercury {
 
                     if (action == "stop") {
                         runtime.stopReplay();
-                        writeJson(res, "200 OK", json{
+                        writeJsonIfOpen(res, aborted, "200 OK", json{
                             {"status", "ok"},
                             {"replayActive", runtime.isReplayActive()}
                         });
@@ -327,7 +339,7 @@ namespace Mercury {
                     if (action == "start") {
                         const auto replayFile = parsed.value("replayFile", std::string());
                         if (replayFile.empty()) {
-                            writeJson(res, "400 Bad Request", json{
+                            writeJsonIfOpen(res, aborted, "400 Bad Request", json{
                                 {"error", "invalid_request"},
                                 {"message", "replayFile is required"}
                             });
@@ -338,26 +350,26 @@ namespace Mercury {
                         const auto loop = parsed.value("loop", false);
                         const auto loopPauseMs = parsed.value("loopPauseMs", uint64_t{1000});
                         if (!runtime.startReplay(replayFile, speed, loop, loopPauseMs)) {
-                            writeJson(res, "400 Bad Request", json{
+                            writeJsonIfOpen(res, aborted, "400 Bad Request", json{
                                 {"error", "invalid_replay"},
                                 {"message", "Failed to start replay"}
                             });
                             return;
                         }
 
-                        writeJson(res, "200 OK", json{
+                        writeJsonIfOpen(res, aborted, "200 OK", json{
                             {"status", "ok"},
                             {"replayActive", runtime.isReplayActive()}
                         });
                         return;
                     }
 
-                    writeJson(res, "400 Bad Request", json{
+                    writeJsonIfOpen(res, aborted, "400 Bad Request", json{
                         {"error", "invalid_control"},
                         {"message", "Unsupported replay control action"}
                     });
                 } catch (const std::exception& ex) {
-                    writeJson(res, "400 Bad Request", json{
+                    writeJsonIfOpen(res, aborted, "400 Bad Request", json{
                         {"error", "invalid_request"},
                         {"message", ex.what()}
                     });
@@ -367,12 +379,17 @@ namespace Mercury {
 
         app.post("/api/lab/run", [&options](auto* res, auto* /*req*/) {
             auto body = std::make_shared<std::string>();
+            auto aborted = std::make_shared<std::atomic<bool>>(false);
 
-            res->onAborted([body]() {
-                (void) body;
+            res->onAborted([aborted]() {
+                aborted->store(true, std::memory_order_release);
             });
 
-            res->onData([body, res, &options](std::string_view chunk, bool isLast) {
+            res->onData([body, aborted, res, &options](std::string_view chunk, bool isLast) {
+                if (aborted->load(std::memory_order_acquire)) {
+                    return;
+                }
+
                 body->append(chunk.data(), chunk.size());
                 if (!isLast) {
                     return;
@@ -383,7 +400,7 @@ namespace Mercury {
                     const auto mode = parsed.value("mode", std::string("backtest"));
                     if (mode != "backtest" && mode != "headless" &&
                         mode != "sweep" && mode != "calibrate_replay") {
-                        writeJson(res, "400 Bad Request", json{
+                        writeJsonIfOpen(res, aborted, "400 Bad Request", json{
                             {"error", "invalid_lab_mode"},
                             {"message", "mode must be backtest, headless, sweep, or calibrate_replay"}
                         });
@@ -403,7 +420,7 @@ namespace Mercury {
                         if (outputDir) {
                             response["outputDir"] = pathString(*outputDir);
                         }
-                        writeJson(res, "200 OK", response);
+                        writeJsonIfOpen(res, aborted, "200 OK", response);
                         return;
                     }
 
@@ -418,9 +435,9 @@ namespace Mercury {
                     if (outputDir) {
                         response["outputDir"] = pathString(*outputDir);
                     }
-                    writeJson(res, "200 OK", response);
+                    writeJsonIfOpen(res, aborted, "200 OK", response);
                 } catch (const std::exception& ex) {
-                    writeJson(res, "400 Bad Request", json{
+                    writeJsonIfOpen(res, aborted, "400 Bad Request", json{
                         {"error", "invalid_lab_request"},
                         {"message", ex.what()}
                     });
@@ -474,13 +491,13 @@ namespace Mercury {
             .sendPingsAutomatically = true,
             .open = [&publisher](auto* ws) {
                 ws->subscribe(MarketDataPublisher::TOPIC_BIN);
-                publisher.incrementConnections();
+                publisher.incrementBinaryConnections();
             },
             .message = [](auto* /*ws*/, std::string_view /*message*/, uWS::OpCode /*opCode*/) {
                 // Binary path is read-only; ignore client messages.
             },
             .close = [&publisher](auto* /*ws*/, int /*code*/, std::string_view /*message*/) {
-                publisher.decrementConnections();
+                publisher.decrementBinaryConnections();
             }
         });
 

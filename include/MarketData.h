@@ -118,6 +118,7 @@ namespace Mercury {
     struct SimulationStateEvent {
         uint64_t sequence = 0;
         std::string symbol;
+        std::vector<std::string> symbols;
         bool enabled = false;
         bool running = false;
         bool paused = false;

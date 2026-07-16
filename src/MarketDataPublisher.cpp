@@ -44,15 +44,31 @@ namespace Mercury {
     }
 
     void MarketDataPublisher::incrementConnections() {
-        connections_.fetch_add(1);
+        jsonConnections_.fetch_add(1);
     }
 
     void MarketDataPublisher::decrementConnections() {
-        connections_.fetch_sub(1);
+        jsonConnections_.fetch_sub(1);
+    }
+
+    void MarketDataPublisher::incrementBinaryConnections() {
+        binaryConnections_.fetch_add(1);
+    }
+
+    void MarketDataPublisher::decrementBinaryConnections() {
+        binaryConnections_.fetch_sub(1);
+    }
+
+    uint64_t MarketDataPublisher::jsonConnectionCount() const {
+        return jsonConnections_.load();
+    }
+
+    uint64_t MarketDataPublisher::binaryConnectionCount() const {
+        return binaryConnections_.load();
     }
 
     uint64_t MarketDataPublisher::connectionCount() const {
-        return connections_.load();
+        return jsonConnections_.load() + binaryConnections_.load();
     }
 
     void MarketDataPublisher::onBookDelta(const BookDelta& delta) {

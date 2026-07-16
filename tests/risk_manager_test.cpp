@@ -383,6 +383,26 @@ TEST_F(RiskManagerTest, ChecksMarketOrderQuantityLimit) {
     EXPECT_EQ(event.eventType, RiskEventType::OrderQuantityLimitBreached);
 }
 
+TEST_F(RiskManagerTest, RejectsWhenOrderRateExceeded) {
+    RiskLimits tight;
+    tight.maxOrdersPerSecond = 3;
+    tight.maxOrderQuantity = 100000;
+    tight.maxOrderValue = 1000000000;
+    tight.maxPositionQuantity = 1000000;
+    tight.maxOpenOrders = 100000;
+    auto rm = std::make_unique<RiskManager>(tight);
+
+    for (int i = 0; i < 3; ++i) {
+        auto order = createOrder(static_cast<uint64_t>(i + 1), Side::Buy, 100, 1, 1);
+        EXPECT_TRUE(rm->checkOrder(order).isApproved()) << "order " << i;
+    }
+
+    auto blocked = createOrder(99, Side::Buy, 100, 1, 1);
+    auto event = rm->checkOrder(blocked);
+    EXPECT_TRUE(event.isRejected());
+    EXPECT_EQ(event.eventType, RiskEventType::OrderRateExceeded);
+}
+
 TEST_F(RiskManagerTest, ApprovesValidMarketOrder) {
     // Use quantity that won't exceed limits when multiplied by default market price
     auto order = createMarketOrder(1, Side::Buy, 5, 1);  // Small quantity

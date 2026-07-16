@@ -8,10 +8,13 @@
 #include "PnLTracker.h"
 #include <vector>
 #include <memory>
+#include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <string>
 #include <functional>
 #include <iostream>
+#include <algorithm>
 
 namespace Mercury {
 
@@ -251,7 +254,13 @@ namespace Mercury {
             if (it == strategyOrders_.end()) return;
             
             for (uint64_t orderId : it->second) {
-                engine_.cancelOrder(orderId);
+                std::optional<Order> resting = engine_.getOrderBook().getOrder(orderId);
+                auto cancelResult = engine_.cancelOrder(orderId);
+                if (cancelResult.status == ExecutionStatus::Cancelled && resting) {
+                    noteRiskOrderClosed(orderId, *resting);
+                    noteQuoteClosed(name, resting->side);
+                }
+                orderToStrategy_.erase(orderId);
             }
             it->second.clear();
         }
@@ -350,6 +359,11 @@ namespace Mercury {
         std::unordered_map<std::string, StrategyMetrics> strategyMetrics_;
         std::unordered_map<std::string, std::vector<uint64_t>> strategyOrders_;
         std::unordered_map<uint64_t, std::string> orderToStrategy_;
+        // Order IDs that were counted via RiskManager::onOrderAdded (resting GTC).
+        std::unordered_set<uint64_t> riskOpenOrderIds_;
+        // Synchronous submit currently in progress. Its trade callbacks must
+        // not clean it up before the final result says whether it rested.
+        uint64_t activeSubmittingOrderId_ = 0;
         
         uint64_t nextOrderId_;
         uint64_t tickCount_ = 0;
@@ -357,6 +371,27 @@ namespace Mercury {
         
         SignalCallback signalCallback_;
         ExecutionCallback executionCallback_;
+
+        void noteRiskOrderClosed(uint64_t orderId, const Order& sample) {
+            if (!riskManager_) {
+                return;
+            }
+            if (riskOpenOrderIds_.erase(orderId) > 0) {
+                riskManager_->onOrderRemoved(sample);
+            }
+        }
+
+        void noteQuoteRested(const std::string& strategyName, const Order& order) {
+            if (auto* mm = dynamic_cast<MarketMakingStrategy*>(getStrategy(strategyName))) {
+                mm->onQuoteRested(order.side, order.price, order.quantity);
+            }
+        }
+
+        void noteQuoteClosed(const std::string& strategyName, Side side) {
+            if (auto* mm = dynamic_cast<MarketMakingStrategy*>(getStrategy(strategyName))) {
+                mm->onQuoteClosed(side);
+            }
+        }
 
         /**
          * Setup callbacks from matching engine
@@ -431,15 +466,38 @@ namespace Mercury {
                 }
             }
 
+            // A market maker owns one acknowledged quote per side. Replace the
+            // old quote only after the new intent has passed risk checks.
+            if (dynamic_cast<MarketMakingStrategy*>(&strategy)) {
+                cancelSideOrders(strategyName, order.side);
+            }
+
             // Submit order
             orderToStrategy_[order.id] = strategyName;
             strategyOrders_[strategyName].push_back(order.id);
             strategyMetrics_[strategyName].ordersSubmitted++;
             
+            activeSubmittingOrderId_ = order.id;
             auto result = engine_.submitOrder(order);
+            activeSubmittingOrderId_ = 0;
             
             // Process result
             processExecutionResult(strategyName, strategy, order, result, isClosingOrder);
+
+            // Use post-submit book state for quote acknowledgement, tracking,
+            // and RiskManager open-order accounting.
+            auto resting = engine_.getOrderBook().getOrder(order.id);
+            if (resting) {
+                noteQuoteRested(strategyName, *resting);
+                if (config_.enableRiskChecks && riskManager_ &&
+                    riskOpenOrderIds_.insert(order.id).second) {
+                    riskManager_->onOrderAdded(*resting);
+                }
+            } else {
+                noteRiskOrderClosed(order.id, order);
+                noteQuoteClosed(strategyName, order.side);
+                removeOrderFromTracking(strategyName, order.id);
+            }
         }
 
         /**
@@ -481,13 +539,19 @@ namespace Mercury {
                 executionCallback_(strategyName, result);
             }
             
-            // Update metrics based on status
+            // Status counters for non-fill outcomes. Fills (Filled / PartialFill
+            // with trades) are counted in onTradeExecuted so resting and
+            // aggressive fills share one path and are not double-applied.
             switch (result.status) {
                 case ExecutionStatus::Filled:
-                    metrics.ordersFilled++;
-                    break;
                 case ExecutionStatus::PartialFill:
-                    metrics.ordersPartialFilled++;
+                    // Counted per-trade in onTradeExecuted when hasFills();
+                    // zero-fill partial/cancel-style statuses fall through.
+                    if (!result.hasFills()) {
+                        if (result.status == ExecutionStatus::PartialFill) {
+                            metrics.ordersPartialFilled++;
+                        }
+                    }
                     break;
                 case ExecutionStatus::Cancelled:
                     metrics.ordersCancelled++;
@@ -498,37 +562,13 @@ namespace Mercury {
                 default:
                     break;
             }
-            
-            // Update strategy state for fills
-            if (result.hasFills()) {
-                for (const auto& trade : result.trades) {
-                    metrics.totalTrades++;
-                    metrics.totalVolume += trade.quantity;
-                    
-                    // Update strategy position
-                    updateStrategyPosition(strategyName, strategy, order.side, 
-                                          trade.quantity, trade.price);
-                    
-                    // Notify strategy
-                    strategy.onTradeExecuted(trade, true);
-                    
-                    // Update P&L tracker
-                    if (config_.enablePnLTracking && pnlTracker_) {
-                        uint64_t buyClientId = (order.side == Side::Buy) ? order.clientId : 0;
-                        uint64_t sellClientId = (order.side == Side::Sell) ? order.clientId : 0;
-                        pnlTracker_->onTradeExecuted(trade, buyClientId, sellClientId, trade.price);
-                    }
-                }
-            }
+
+            // Do NOT re-apply result.trades here. MatchingEngine::notifyTrade
+            // already ran onTradeExecuted for each fill during submitOrder.
             
             // Notify strategy of execution
             strategy.onOrderFilled(result);
             
-            // Remove filled/cancelled orders from tracking
-            if (result.status == ExecutionStatus::Filled || 
-                result.status == ExecutionStatus::Cancelled) {
-                removeOrderFromTracking(strategyName, order.id);
-            }
         }
 
         /**
@@ -560,7 +600,8 @@ namespace Mercury {
                 metrics.totalPnL = state.totalPnL;
             }
             
-            // Call strategy-specific position update
+            // Strategy-specific bookkeeping only (entry/stops). Strategies must
+            // not re-add qty to state_.netPosition — manager already did above.
             if (auto* mm = dynamic_cast<MarketMakingStrategy*>(&strategy)) {
                 mm->updatePosition(side, qty, price);
             } else if (auto* mom = dynamic_cast<MomentumStrategy*>(&strategy)) {
@@ -576,54 +617,49 @@ namespace Mercury {
             auto buyIt = orderToStrategy_.find(trade.buyOrderId);
             auto sellIt = orderToStrategy_.find(trade.sellOrderId);
             
-            // Update metrics and notify for buy side strategy
+            // Single fill-application path for both resting and aggressive legs.
+            auto applyFillSide = [&](uint64_t orderId, const std::string& strategyName, Side side) {
+                auto* strategy = getStrategy(strategyName);
+                if (!strategy) {
+                    return;
+                }
+
+                auto& metrics = strategyMetrics_[strategyName];
+                metrics.totalTrades++;
+                metrics.totalVolume += trade.quantity;
+                metrics.ordersFilled++;
+
+                updateStrategyPosition(strategyName, *strategy, side,
+                                       trade.quantity, trade.price);
+                strategy->onTradeExecuted(trade, true);
+
+                if (config_.enablePnLTracking && pnlTracker_) {
+                    const uint64_t buyClientId =
+                        side == Side::Buy ? strategy->getConfig().clientId : 0;
+                    const uint64_t sellClientId =
+                        side == Side::Sell ? strategy->getConfig().clientId : 0;
+                    pnlTracker_->onTradeExecuted(trade, buyClientId, sellClientId, trade.price);
+                }
+
+                // The resting side has already been mutated. The aggressive
+                // side is finalized only after submitOrder returns.
+                if (orderId != activeSubmittingOrderId_ &&
+                    !engine_.getOrderBook().hasOrder(orderId)) {
+                    Order sample;
+                    sample.id = orderId;
+                    sample.clientId = strategy->getConfig().clientId;
+                    sample.side = side;
+                    noteRiskOrderClosed(orderId, sample);
+                    noteQuoteClosed(strategyName, side);
+                    removeOrderFromTracking(strategyName, orderId);
+                }
+            };
+
             if (buyIt != orderToStrategy_.end()) {
-                const std::string& strategyName = buyIt->second;
-                if (auto* strategy = getStrategy(strategyName)) {
-                    // Update metrics
-                    auto& metrics = strategyMetrics_[strategyName];
-                    metrics.totalTrades++;
-                    metrics.totalVolume += trade.quantity;
-                    metrics.ordersFilled++;
-                    
-                    // Update strategy position (bought = long)
-                    updateStrategyPosition(strategyName, *strategy, Side::Buy, 
-                                          trade.quantity, trade.price);
-                    
-                    // Notify strategy
-                    strategy->onTradeExecuted(trade, true);
-                    
-                    // Update P&L tracker
-                    if (config_.enablePnLTracking && pnlTracker_) {
-                        pnlTracker_->onTradeExecuted(trade, 
-                            strategy->getConfig().clientId, 0, trade.price);
-                    }
-                }
+                applyFillSide(trade.buyOrderId, buyIt->second, Side::Buy);
             }
-            
-            // Update metrics and notify for sell side strategy
             if (sellIt != orderToStrategy_.end()) {
-                const std::string& strategyName = sellIt->second;
-                if (auto* strategy = getStrategy(strategyName)) {
-                    // Update metrics
-                    auto& metrics = strategyMetrics_[strategyName];
-                    metrics.totalTrades++;
-                    metrics.totalVolume += trade.quantity;
-                    metrics.ordersFilled++;
-                    
-                    // Update strategy position (sold = short)
-                    updateStrategyPosition(strategyName, *strategy, Side::Sell, 
-                                          trade.quantity, trade.price);
-                    
-                    // Notify strategy
-                    strategy->onTradeExecuted(trade, true);
-                    
-                    // Update P&L tracker
-                    if (config_.enablePnLTracking && pnlTracker_) {
-                        pnlTracker_->onTradeExecuted(trade, 
-                            0, strategy->getConfig().clientId, trade.price);
-                    }
-                }
+                applyFillSide(trade.sellOrderId, sellIt->second, Side::Sell);
             }
         }
 
@@ -651,7 +687,13 @@ namespace Mercury {
             }
             
             for (uint64_t orderId : toCancel) {
-                engine_.cancelOrder(orderId);
+                std::optional<Order> resting = engine_.getOrderBook().getOrder(orderId);
+                auto cancelResult = engine_.cancelOrder(orderId);
+                if (cancelResult.status == ExecutionStatus::Cancelled && resting) {
+                    noteRiskOrderClosed(orderId, *resting);
+                    noteQuoteClosed(name, resting->side);
+                }
+                removeOrderFromTracking(name, orderId);
             }
         }
 

@@ -277,6 +277,54 @@ TEST(SimulationRuntimeTest, TradeCountAdvancesAcrossMostCheckpointWindows) {
     EXPECT_GE(advancingWindows, 5);
 }
 
+TEST(SimulationRuntimeTest, ReducingAgentCountsCancelsOrphanQuotes) {
+    auto config = makeSimConfig();
+    config.momentumCount = 0;
+    config.meanReversionCount = 0;
+    config.noiseTraderCount = 0;
+    config.marketMakerCount = 3;
+    config.speed = 100.0;
+
+    MarketRuntime runtime("SIM", config);
+    runtime.start();
+
+    ASSERT_TRUE(waitUntil([&]() {
+        const auto snapshot = runtime.getSnapshot(10);
+        return snapshot.bids.size() >= 2 && snapshot.asks.size() >= 2;
+    }, 3000));
+
+    const auto before = runtime.getSnapshot(20);
+    const size_t beforeBidLevels = before.bids.size();
+    const size_t beforeAskLevels = before.asks.size();
+    ASSERT_GE(beforeBidLevels, 2u);
+
+    SimulationControl control;
+    control.action = "set_counts";
+    control.hasAgentCounts = true;
+    control.marketMakerCount = 1;
+    control.momentumCount = 0;
+    control.meanReversionCount = 0;
+    control.noiseTraderCount = 0;
+    ASSERT_TRUE(runtime.applyControl(control));
+
+    // After rebuild, only one MM remains; orphan GTC from removed makers must
+    // not leave the book permanently bloated relative to a single maker.
+    ASSERT_TRUE(waitUntil([&]() {
+        const auto snapshot = runtime.getSnapshot(20);
+        return snapshot.bids.size() <= beforeBidLevels &&
+               snapshot.asks.size() <= beforeAskLevels &&
+               runtime.getState().marketMakerCount == 1;
+    }, 3000));
+
+    const auto after = runtime.getSnapshot(20);
+    runtime.stop();
+
+    EXPECT_EQ(runtime.getState().marketMakerCount, 1u);
+    // Single maker quotes fewer total levels than three makers.
+    EXPECT_LE(after.bids.size() + after.asks.size(),
+              before.bids.size() + before.asks.size());
+}
+
 TEST(SimulationRuntimeTest, VolatilityPresetsStayWithinReasonableExcursionBounds) {
     auto config = makeSimConfig();
     config.speed = 500.0;

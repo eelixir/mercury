@@ -263,6 +263,17 @@ namespace Mercury {
                 }
             }
 
+            // Modify rows: id,timestamp,modify,side,newPrice,newQuantity[,clientId]
+            // map price/quantity columns onto modify fields and target the id.
+            if (order.orderType == OrderType::Modify) {
+                order.targetOrderId = order.id;
+                order.newPrice = order.price;
+                order.newQuantity = order.quantity;
+                // id remains as the modify request id (or 0 to auto-allocate upstream).
+            }
+
+            // Cancel rows use id as the cancel target (order.id).
+
         } catch (const std::exception&) {
             return std::nullopt;
         }

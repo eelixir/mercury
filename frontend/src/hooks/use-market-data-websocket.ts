@@ -5,6 +5,7 @@ import { useMarketDataStore } from '../store/market-data-store'
 
 const BASE_RECONNECT_MS = 500
 const MAX_RECONNECT_MS = 5000
+const SUBSCRIBE_DEPTH = 20
 
 function normalizeWebSocketUrl(rawUrl: string): string {
   if (rawUrl.startsWith('ws://') || rawUrl.startsWith('wss://')) {
@@ -39,6 +40,7 @@ function resolveMarketDataWebSocketUrl(): string {
 export function useMarketDataWebSocket() {
   const applyEnvelope = useMarketDataStore((state) => state.applyEnvelope)
   const setConnectionState = useMarketDataStore((state) => state.setConnectionState)
+  const prepareResync = useMarketDataStore((state) => state.prepareResync)
 
   useEffect(() => {
     let ws: WebSocket | null = null
@@ -64,14 +66,30 @@ export function useMarketDataWebSocket() {
 
     const connect = () => {
       if (disposed) return
+
+      // Drop any frames buffered from a prior socket so they cannot interleave
+      // with the fresh connect snapshot.
+      pendingEnvelopes = []
+      if (frameTimer !== null) {
+        window.cancelAnimationFrame(frameTimer)
+        frameTimer = null
+      }
+
       setConnectionState('connecting')
       ws = new WebSocket(resolveMarketDataWebSocketUrl())
 
       ws.addEventListener('open', () => {
         if (disposed) return
         attempt = 0
+        // Reset sequence gate so the server's connect snapshot is always applied
+        // (including when sequence equals the last pre-disconnect frame).
+        prepareResync()
         setConnectionState('connected')
-        ws?.send(JSON.stringify({ type: 'subscribe', depth: 20 }))
+        try {
+          ws?.send(JSON.stringify({ type: 'subscribe', depth: SUBSCRIBE_DEPTH }))
+        } catch {
+          // ignore
+        }
       })
 
       const scheduleReconnect = () => {
@@ -114,6 +132,7 @@ export function useMarketDataWebSocket() {
       if (frameTimer !== null) {
         window.cancelAnimationFrame(frameTimer)
       }
+      pendingEnvelopes = []
       if (ws) {
         try {
           ws.close()
@@ -122,5 +141,5 @@ export function useMarketDataWebSocket() {
         }
       }
     }
-  }, [applyEnvelope, setConnectionState])
+  }, [applyEnvelope, prepareResync, setConnectionState])
 }

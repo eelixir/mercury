@@ -2,8 +2,30 @@
 #include <iostream>
 #include <iomanip>
 #include <algorithm>
+#include <limits>
 
 namespace Mercury {
+
+    namespace {
+        int64_t saturatingPriceQty(int64_t price, uint64_t quantity) {
+            if (price == 0 || quantity == 0) {
+                return 0;
+            }
+            const int64_t qty = quantity > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())
+                ? std::numeric_limits<int64_t>::max()
+                : static_cast<int64_t>(quantity);
+            if (price > 0) {
+                if (qty > std::numeric_limits<int64_t>::max() / price) {
+                    return std::numeric_limits<int64_t>::max();
+                }
+            } else {
+                if (qty > std::numeric_limits<int64_t>::max() / -price) {
+                    return std::numeric_limits<int64_t>::min() + 1;
+                }
+            }
+            return price * qty;
+        }
+    }
 
     // ==================== PnLTracker ====================
 
@@ -80,8 +102,7 @@ namespace Mercury {
         if (buyClientId > 0) {
             ClientPnL& buyerPnL = getOrCreateClientPnL(buyClientId);
             
-            int64_t tradeValue = trade.price * static_cast<int64_t>(trade.quantity);
-            buyerPnL.totalBuyCost += tradeValue;
+            buyerPnL.totalBuyCost += saturatingPriceQty(trade.price, trade.quantity);
             buyerPnL.totalBuyQuantity += trade.quantity;
             buyerPnL.totalTrades++;
             
@@ -98,7 +119,7 @@ namespace Mercury {
             // Any remaining quantity increases long position
             if (remainingQty > 0) {
                 buyerPnL.longQuantity += remainingQty;
-                buyerPnL.longCostBasis += trade.price * static_cast<int64_t>(remainingQty);
+                buyerPnL.longCostBasis += saturatingPriceQty(trade.price, remainingQty);
                 
                 // Add to open entries for FIFO tracking
                 PositionEntry entry;
@@ -123,8 +144,7 @@ namespace Mercury {
         if (sellClientId > 0) {
             ClientPnL& sellerPnL = getOrCreateClientPnL(sellClientId);
             
-            int64_t tradeValue = trade.price * static_cast<int64_t>(trade.quantity);
-            sellerPnL.totalSellProceeds += tradeValue;
+            sellerPnL.totalSellProceeds += saturatingPriceQty(trade.price, trade.quantity);
             sellerPnL.totalSellQuantity += trade.quantity;
             sellerPnL.totalTrades++;
             
@@ -141,7 +161,7 @@ namespace Mercury {
             // Any remaining quantity increases short position
             if (remainingQty > 0) {
                 sellerPnL.shortQuantity += remainingQty;
-                sellerPnL.shortCostBasis += trade.price * static_cast<int64_t>(remainingQty);
+                sellerPnL.shortCostBasis += saturatingPriceQty(trade.price, remainingQty);
                 
                 // Add to open entries for FIFO tracking
                 PositionEntry entry;

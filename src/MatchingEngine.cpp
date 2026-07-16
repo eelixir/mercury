@@ -5,6 +5,7 @@
 #include <chrono>
 #include <iostream>
 #include <limits>
+#include <cassert>
 
 namespace Mercury {
 
@@ -66,7 +67,7 @@ namespace Mercury {
             return ExecutionResult::makeRejection(order.id, RejectReason::InvalidQuantity);
         }
 
-        // Handle FOK (Fill-or-Kill): Check if we can fill completely
+        // Handle FOK (Fill-or-Kill): Check if we can fill completely (STP-aware).
         if (order.tif == TimeInForce::FOK) {
             if (!canFillCompletely(order)) {
                 result = ExecutionResult::makeRejection(order.id, RejectReason::FOKCannotFill);
@@ -80,11 +81,28 @@ namespace Mercury {
 
         // Try to match against the opposite side
         std::vector<Trade> trades;
-        matchOrder(order, trades);
+        std::vector<PendingBookMutation> pendingMutations;
+        const bool deferCallbacks = order.tif == TimeInForce::FOK;
+        matchOrder(order, trades, deferCallbacks, &pendingMutations);
+
+        if (deferCallbacks) {
+            // canFillCompletely() and the mutation pass execute without any
+            // externally visible callbacks between them, so FOK is atomic.
+            assert(order.quantity == 0);
+            flushDeferredMatchCallbacks(trades, pendingMutations);
+        }
 
         result.trades = std::move(trades);
         result.filledQuantity = originalQuantity - order.quantity;
         result.remainingQuantity = order.quantity;
+
+        // FOK callbacks are deferred until the complete mutation is committed,
+        // so an accepted FOK can only report a full fill.
+        if (order.tif == TimeInForce::FOK) {
+            result.status = ExecutionStatus::Filled;
+            result.message = "FOK order fully filled";
+            return result;
+        }
 
         // Handle IOC (Immediate-or-Cancel): Don't rest in book
         if (order.tif == TimeInForce::IOC) {
@@ -101,8 +119,25 @@ namespace Mercury {
             return result;
         }
 
-        // If order still has remaining quantity, add to book (GTC behavior)
+        // If order still has remaining quantity, add to book (GTC behavior).
+        // Self-trade prevention may leave opposite own quotes unfilled; never
+        // rest marketable size against them (locked/crossed book).
         if (order.quantity > 0) {
+            if (wouldRestLockOrCross(order)) {
+                result.remainingQuantity = order.quantity;
+                if (result.filledQuantity > 0) {
+                    result.status = ExecutionStatus::PartialFill;
+                    result.rejectReason = RejectReason::SelfTradePrevention;
+                    result.message =
+                        "Partially filled; remainder cancelled (self-trade prevention)";
+                } else {
+                    result = ExecutionResult::makeRejection(
+                        order.id, RejectReason::SelfTradePrevention);
+                    result.remainingQuantity = order.quantity;
+                }
+                return result;
+            }
+
             if (!orderBook_.addOrder(order)) {
                 // Pool exhausted or internal failure - remainder cannot rest.
                 // Preserve any fills we already produced but mark the rest
@@ -148,7 +183,7 @@ namespace Mercury {
             return result;
         }
 
-        // Handle FOK: Check if we can fill completely
+        // Handle FOK: Check if we can fill completely (STP-aware).
         if (order.tif == TimeInForce::FOK) {
             if (!canFillCompletely(order)) {
                 result = ExecutionResult::makeRejection(order.id, RejectReason::FOKCannotFill);
@@ -162,13 +197,27 @@ namespace Mercury {
 
         // Match against the book
         std::vector<Trade> trades;
-        matchOrder(order, trades);
+        std::vector<PendingBookMutation> pendingMutations;
+        const bool deferCallbacks = order.tif == TimeInForce::FOK;
+        matchOrder(order, trades, deferCallbacks, &pendingMutations);
+
+        if (deferCallbacks) {
+            assert(order.quantity == 0);
+            flushDeferredMatchCallbacks(trades, pendingMutations);
+        }
 
         result.trades = std::move(trades);
         result.filledQuantity = originalQuantity - order.quantity;
         result.remainingQuantity = order.quantity;
 
-        // Market orders don't rest - any unfilled quantity is cancelled
+        // Accepted market FOK orders are committed without callbacks between
+        // their pre-check and mutation pass, so they always fill completely.
+        if (order.tif == TimeInForce::FOK) {
+            result.status = ExecutionStatus::Filled;
+            result.message = "FOK market order fully filled";
+            return result;
+        }
+
         if (order.quantity > 0) {
             if (result.filledQuantity > 0) {
                 result.status = ExecutionStatus::PartialFill;
@@ -209,9 +258,10 @@ namespace Mercury {
         const int64_t price = existingOrder->price;
         const uint64_t remainingQuantity = existingOrder->quantity;
 
-        // Remove the order
+        // Remove the order. notifyBookMutation derives Remove vs Upsert from
+        // post-mutation level size (do not force Remove while peers remain).
         orderBook_.removeOrder(existingOrder);
-        notifyBookMutation(side, price, BookDeltaAction::Remove);
+        notifyBookMutation(side, price, BookDeltaAction::Upsert);
 
         result.status = ExecutionStatus::Cancelled;
         result.remainingQuantity = remainingQuantity;
@@ -273,7 +323,7 @@ namespace Mercury {
 
         // Remove the original order
         orderBook_.removeOrder(existingOrder);
-        notifyBookMutation(originalSide, originalPrice, BookDeltaAction::Remove);
+        notifyBookMutation(originalSide, originalPrice, BookDeltaAction::Upsert);
 
         // Re-submit with new timestamp (loses time priority)
         modifiedOrder.timestamp = getTimestamp();
@@ -318,7 +368,9 @@ namespace Mercury {
         return result;
     }
 
-    bool MatchingEngine::matchOrder(Order& order, std::vector<Trade>& trades) {
+    bool MatchingEngine::matchOrder(Order& order, std::vector<Trade>& trades,
+                                    bool deferCallbacks,
+                                    std::vector<PendingBookMutation>* pendingMutations) {
         bool matched = false;
 
         // Safety check: order must have quantity
@@ -326,43 +378,62 @@ namespace Mercury {
             return false;
         }
 
-        // Determine which side to match against
+        // Snapshot acceptable price levels up front and walk them in priority
+        // order. Re-querying best after a zero-fill STP level would infinite-
+        // loop (own quotes still set best). Walking the ladder lets us match
+        // non-own size behind own touch quotes.
         if (order.side == Side::Buy) {
-            // Buy orders match against asks (sellers)
-            while (order.quantity > 0 && orderBook_.hasAsks()) {
-                int64_t bestAsk = orderBook_.getBestAsk();
-                
-                // Check if price is acceptable
-                if (!isPriceAcceptable(order, bestAsk)) {
-                    break;  // No more matchable prices
+            std::vector<int64_t> prices;
+            {
+                MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::PriceLevelIteration);
+                for (const auto& [price, level] : orderBook_.getAskLevels()) {
+                    (void) level;
+                    if (!isPriceAcceptable(order, price)) {
+                        break;
+                    }
+                    prices.push_back(price);
+                }
+            }
+
+            for (const int64_t price : prices) {
+                if (order.quantity == 0) {
+                    break;
+                }
+                if (!orderBook_.getAskLevel(price)) {
+                    continue;
                 }
 
-                uint64_t filledQty = matchAtPriceLevel(order, bestAsk, trades);
+                const uint64_t filledQty = matchAtPriceLevel(
+                    order, price, trades, deferCallbacks, pendingMutations);
                 if (filledQty > 0) {
                     matched = true;
-                } else {
-                    // No fills at this level (e.g., all orders blocked by self-trade prevention)
-                    // Must break to avoid infinite loop
-                    break;
                 }
             }
         } else {
-            // Sell orders match against bids (buyers)
-            while (order.quantity > 0 && orderBook_.hasBids()) {
-                int64_t bestBid = orderBook_.getBestBid();
-                
-                // Check if price is acceptable
-                if (!isPriceAcceptable(order, bestBid)) {
-                    break;  // No more matchable prices
+            std::vector<int64_t> prices;
+            {
+                MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::PriceLevelIteration);
+                for (const auto& [price, level] : orderBook_.getBidLevels()) {
+                    (void) level;
+                    if (!isPriceAcceptable(order, price)) {
+                        break;
+                    }
+                    prices.push_back(price);
+                }
+            }
+
+            for (const int64_t price : prices) {
+                if (order.quantity == 0) {
+                    break;
+                }
+                if (!orderBook_.getBidLevel(price)) {
+                    continue;
                 }
 
-                uint64_t filledQty = matchAtPriceLevel(order, bestBid, trades);
+                const uint64_t filledQty = matchAtPriceLevel(
+                    order, price, trades, deferCallbacks, pendingMutations);
                 if (filledQty > 0) {
                     matched = true;
-                } else {
-                    // No fills at this level (e.g., all orders blocked by self-trade prevention)
-                    // Must break to avoid infinite loop
-                    break;
                 }
             }
         }
@@ -370,8 +441,9 @@ namespace Mercury {
         return matched;
     }
 
-    uint64_t MatchingEngine::matchAtPriceLevel(Order& order, int64_t priceLevel, 
-                                                std::vector<Trade>& trades) {
+    uint64_t MatchingEngine::matchAtPriceLevel(
+        Order& order, int64_t priceLevel, std::vector<Trade>& trades,
+        bool deferCallbacks, std::vector<PendingBookMutation>* pendingMutations) {
         uint64_t totalFilled = 0;
 
         // Get the price level directly for efficient iteration
@@ -387,12 +459,8 @@ namespace Mercury {
             return 0;
         }
 
-        // Snapshot identifiers of candidate resting orders up front. We capture
-        // {id, clientId} rather than raw OrderNode* because notifyTrade() below
-        // invokes external callbacks that may re-enter the engine (cancel/
-        // modify/submit) and release nodes back to the object pool. Re-looking
-        // up by id on every iteration guarantees we never dereference freed
-        // memory.
+        // Snapshot identifiers of candidate resting orders up front. The match
+        // mutates each resting node before publishing its trade callback.
         struct Candidate {
             uint64_t id;
             uint64_t clientId;
@@ -430,8 +498,6 @@ namespace Mercury {
             // Calculate fill quantity (with overflow protection)
             const uint64_t restingQuantity = restingOrder->quantity;
             const uint64_t fillQty = std::min(order.quantity, restingQuantity);
-            // Cache side up front: notifyTrade() below may trigger a re-entrant
-            // cancel that releases this node before we read it again.
             const Side restingSide = restingOrder->side;
 
             // Edge case: zero fill (shouldn't happen)
@@ -460,7 +526,6 @@ namespace Mercury {
                 }
 
                 trades.push_back(trade);
-                notifyTrade(trade);
 
                 // Update statistics (with overflow protection)
                 tradeCount_++;
@@ -473,26 +538,48 @@ namespace Mercury {
             order.quantity -= fillQty;
             totalFilled += fillQty;
 
-            // Update or remove the resting order. Re-resolve by id in case a
-            // notifyTrade callback above cancelled this order (which would
-            // release `restingOrder` back to the pool).
+            // Update or remove the resting order before notifying listeners so
+            // lifecycle consumers observe post-trade book state.
             OrderNode* liveNode = orderBook_.getOrderNode(candidate.id);
             if (!liveNode) {
                 // Callback already removed it - nothing for us to do.
                 continue;
             }
             if (fillQty == restingQuantity) {
-                // Fully filled - remove from book
+                // Fully filled - remove from book. Action becomes Remove only
+                // when the price level is empty after the remove.
                 orderBook_.removeOrder(liveNode);
-                notifyBookMutation(restingSide, priceLevel, BookDeltaAction::Remove);
             } else {
                 // Partially filled - update quantity
                 orderBook_.updateOrderQuantity(liveNode, restingQuantity - fillQty);
+            }
+
+            if (deferCallbacks) {
+                if (pendingMutations) {
+                    const PendingBookMutation mutation{restingSide, priceLevel};
+                    if (std::find(pendingMutations->begin(), pendingMutations->end(), mutation) ==
+                        pendingMutations->end()) {
+                        pendingMutations->push_back(mutation);
+                    }
+                }
+            } else {
                 notifyBookMutation(restingSide, priceLevel, BookDeltaAction::Upsert);
+                notifyTrade(trades.back());
             }
         }
 
         return totalFilled;
+    }
+
+    void MatchingEngine::flushDeferredMatchCallbacks(
+        const std::vector<Trade>& trades,
+        const std::vector<PendingBookMutation>& mutations) {
+        for (const auto& [side, price] : mutations) {
+            notifyBookMutation(side, price, BookDeltaAction::Upsert);
+        }
+        for (const auto& trade : trades) {
+            notifyTrade(trade);
+        }
     }
 
     bool MatchingEngine::isPriceAcceptable(const Order& order, int64_t priceLevel) const {
@@ -516,6 +603,16 @@ namespace Mercury {
         }
     }
 
+    bool MatchingEngine::wouldRestLockOrCross(const Order& order) const {
+        if (order.side == Side::Buy && orderBook_.hasAsks()) {
+            return order.price >= orderBook_.getBestAsk();
+        }
+        if (order.side == Side::Sell && orderBook_.hasBids()) {
+            return order.price <= orderBook_.getBestBid();
+        }
+        return false;
+    }
+
     bool MatchingEngine::canFillCompletely(const Order& order) const {
         // Edge case: zero quantity can always be "filled"
         if (order.quantity == 0) {
@@ -524,43 +621,53 @@ namespace Mercury {
 
         uint64_t remainingQty = order.quantity;
 
+        // Count only executable (non-STP-blocked) resting size so FOK pre-checks
+        // match actual matchOrder behavior.
+        auto consumeLevel = [&](const PriceLevel& level) -> bool {
+            for (const auto& node : level) {
+                if (order.clientId != 0 && order.clientId == node.clientId) {
+                    continue;
+                }
+                if (remainingQty <= node.quantity) {
+                    remainingQty = 0;
+                    return true;
+                }
+                remainingQty -= node.quantity;
+            }
+            return false;
+        };
+
         if (order.side == Side::Buy) {
-            // Check ask side
             if (!orderBook_.hasAsks()) {
                 return false;
             }
-            
+
             const auto& askLevels = orderBook_.getAskLevels();
             {
                 MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::PriceLevelIteration);
                 for (const auto& [price, level] : askLevels) {
-                    if (!isPriceAcceptable(order, price)) break;
-
-                    for (const auto& node : level) {
-                        if (remainingQty <= node.quantity) {
-                            return true;  // Can fill completely
-                        }
-                        remainingQty -= node.quantity;
+                    if (!isPriceAcceptable(order, price)) {
+                        break;
+                    }
+                    if (consumeLevel(level)) {
+                        return true;
                     }
                 }
             }
         } else {
-            // Check bid side
             if (!orderBook_.hasBids()) {
                 return false;
             }
-            
+
             const auto& bidLevels = orderBook_.getBidLevels();
             {
                 MERCURY_BENCH_SCOPE(Mercury::BenchTiming::Category::PriceLevelIteration);
                 for (const auto& [price, level] : bidLevels) {
-                    if (!isPriceAcceptable(order, price)) break;
-
-                    for (const auto& node : level) {
-                        if (remainingQty <= node.quantity) {
-                            return true;  // Can fill completely
-                        }
-                        remainingQty -= node.quantity;
+                    if (!isPriceAcceptable(order, price)) {
+                        break;
+                    }
+                    if (consumeLevel(level)) {
+                        return true;
                     }
                 }
             }
@@ -595,9 +702,12 @@ namespace Mercury {
         mutation.price = price;
         mutation.quantity = quantity;
         mutation.orderCount = orderCount;
+        // Always derive action from post-mutation level state so canceling one
+        // of several orders at a price never publishes Remove with residual size.
+        (void) action;
         mutation.action = (mutation.quantity == 0 || mutation.orderCount == 0)
             ? BookDeltaAction::Remove
-            : action;
+            : BookDeltaAction::Upsert;
 
         auto now = std::chrono::time_point_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now());

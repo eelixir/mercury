@@ -236,6 +236,7 @@ namespace Mercury {
             prices_.clear();
             volumes_.clear();
             bars_.clear();
+            macdHistory_.clear();
             entryPrice_ = 0;
             highWaterMark_ = 0;
             lowWaterMark_ = 0;
@@ -264,6 +265,8 @@ namespace Mercury {
         std::deque<int64_t> prices_;
         std::deque<uint64_t> volumes_;
         std::deque<PriceBar> bars_;
+        // Per-instance MACD history for signal-line smoothing (not process-wide).
+        mutable std::deque<double> macdHistory_;
         
         // Position tracking
         int64_t entryPrice_ = 0;
@@ -367,39 +370,47 @@ namespace Mercury {
         }
 
         /**
-         * Calculate Exponential Moving Average
+         * Calculate Exponential Moving Average.
+         * Seeds with SMA of the first `period` samples, then walks only the
+         * subsequent prices (standard EMA — does not re-apply the seed window).
          */
         double calculateEMA(uint64_t period) const {
-            if (prices_.size() < period) return 0.0;
-            
-            double multiplier = 2.0 / (static_cast<double>(period) + 1.0);
-            double ema = calculateSMA(period);  // Initialize with SMA
-            
-            auto it = prices_.end() - period;
+            if (prices_.size() < period) {
+                return 0.0;
+            }
+            if (prices_.size() == period) {
+                return calculateSMA(period);
+            }
+
+            const double multiplier = 2.0 / (static_cast<double>(period) + 1.0);
+            double sum = 0.0;
+            auto it = prices_.begin();
             for (uint64_t i = 0; i < period; ++i, ++it) {
+                sum += static_cast<double>(*it);
+            }
+            double ema = sum / static_cast<double>(period);
+            for (; it != prices_.end(); ++it) {
                 ema = (static_cast<double>(*it) - ema) * multiplier + ema;
             }
             return ema;
         }
 
         /**
-         * Calculate signal line (EMA of MACD)
+         * Calculate signal line (EMA of MACD) using per-instance history.
          */
         double calculateSignalLine(double currentMACD) const {
-            // Simplified - in practice would maintain MACD history
-            static std::deque<double> macdHistory;
-            macdHistory.push_back(currentMACD);
-            
-            if (macdHistory.size() > momConfig_.signalPeriod) {
-                macdHistory.pop_front();
+            macdHistory_.push_back(currentMACD);
+
+            if (macdHistory_.size() > momConfig_.signalPeriod) {
+                macdHistory_.pop_front();
             }
-            
-            if (macdHistory.size() < momConfig_.signalPeriod) {
+
+            if (macdHistory_.size() < momConfig_.signalPeriod) {
                 return currentMACD;
             }
-            
-            double sum = std::accumulate(macdHistory.begin(), macdHistory.end(), 0.0);
-            return sum / static_cast<double>(macdHistory.size());
+
+            double sum = std::accumulate(macdHistory_.begin(), macdHistory_.end(), 0.0);
+            return sum / static_cast<double>(macdHistory_.size());
         }
 
         /**

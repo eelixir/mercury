@@ -20,8 +20,9 @@ namespace Mercury {
     }
 
     void EngineService::start() {
-        bool expected = false;
-        if (!running_.compare_exchange_strong(expected, true)) {
+        std::lock_guard<std::mutex> lifeLock(lifecycleMutex_);
+
+        if (running_.load()) {
             return;
         }
 
@@ -32,6 +33,15 @@ namespace Mercury {
             wireBookCallbacks(*book);
         }
 
+        {
+            std::lock_guard<std::mutex> queueLock(queueMutex_);
+            // Drop any stale tasks left from a previous lifecycle.
+            std::queue<Task> empty;
+            taskQueue_.swap(empty);
+            acceptTasks_.store(true);
+        }
+
+        running_.store(true);
         engineThread_ = std::thread([this]() {
             engineLoop();
         });
@@ -56,19 +66,42 @@ namespace Mercury {
     }
 
     void EngineService::stop() {
+        std::lock_guard<std::mutex> lifeLock(lifecycleMutex_);
+
         if (!running_.load()) {
             return;
         }
 
         stopReplay();
-        stopRequested_.store(true);
+
+        // Refuse new invoke() work immediately so callers never enqueue onto
+        // a thread that is about to exit (or has already exited).
+        {
+            std::lock_guard<std::mutex> queueLock(queueMutex_);
+            acceptTasks_.store(false);
+            stopRequested_.store(true);
+        }
         queueCv_.notify_all();
 
         if (engineThread_.joinable()) {
             engineThread_.join();
         }
 
+        // Complete any tasks that were already queued before acceptTasks_
+        // flipped false. The engine thread is gone, so run them here — the
+        // books remain valid and no concurrent engine writer exists.
+        std::queue<Task> leftover;
+        {
+            std::lock_guard<std::mutex> queueLock(queueMutex_);
+            leftover.swap(taskQueue_);
+        }
+        while (!leftover.empty()) {
+            leftover.front()();
+            leftover.pop();
+        }
+
         running_.store(false);
+        stopRequested_.store(false);
     }
 
     void EngineService::setMarketDataSink(MarketDataSink* sink) {
@@ -103,16 +136,22 @@ namespace Mercury {
             order.id = allocateOrderId();
         }
 
-        return invoke([this, symbol, order, entryTimestampNs]() mutable {
-            activeSymbol_ = symbol;
-            entryTimestampNs_ = entryTimestampNs;
-            auto& book = *books_.at(symbol);
-            auto result = book.engine.submitOrder(order);
-            entryTimestampNs_ = 0;
-            publishStats(symbol);
-            activeSymbol_.clear();
-            return result;
-        });
+        try {
+            return invoke([this, symbol, order, entryTimestampNs]() mutable {
+                activeSymbol_ = symbol;
+                entryTimestampNs_ = entryTimestampNs;
+                auto& book = *books_.at(symbol);
+                auto result = book.engine.submitOrder(order);
+                entryTimestampNs_ = 0;
+                publishStats(symbol);
+                activeSymbol_.clear();
+                return result;
+            });
+        } catch (const std::runtime_error&) {
+            // Engine is stopping or not accepting tasks — fail the order rather
+            // than hang the caller.
+            return ExecutionResult::makeRejection(order.id, RejectReason::InternalError);
+        }
     }
 
     L2Snapshot EngineService::getSnapshot(const std::string& symbol, size_t depth) {
@@ -127,9 +166,15 @@ namespace Mercury {
         }
 
         depth = std::min<size_t>(100, std::max<size_t>(1, depth));
-        return invoke([this, symbol, depth]() {
-            return buildSnapshot(symbol, depth);
-        });
+        try {
+            return invoke([this, symbol, depth]() {
+                return buildSnapshot(symbol, depth);
+            });
+        } catch (const std::runtime_error&) {
+            L2Snapshot empty;
+            empty.symbol = symbol;
+            return empty;
+        }
     }
 
     std::optional<OrderBook::QueuePositionInfo> EngineService::getQueuePosition(const std::string& symbol, uint64_t orderId) {
@@ -256,6 +301,9 @@ namespace Mercury {
                     for (size_t i = 0; i < orders.size() && replayActive_.load(); ++i) {
                         Order o = orders[i];
                         o.id += loopOffset;
+                        if (o.orderType == OrderType::Modify) {
+                            o.targetOrderId += loopOffset;
+                        }
                         submitOrder(replaySymbol, o);
 
                         if (i + 1 >= orders.size()) {
@@ -321,6 +369,13 @@ namespace Mercury {
     void EngineService::enqueue(Task task) {
         {
             std::lock_guard<std::mutex> lock(queueMutex_);
+            if (!acceptTasks_.load()) {
+                // Best-effort: still run the task so any attached promise is
+                // fulfilled rather than leaked. Callers that need strict
+                // engine-thread affinity should use invoke().
+                task();
+                return;
+            }
             taskQueue_.push(std::move(task));
         }
         queueCv_.notify_one();

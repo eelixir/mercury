@@ -45,6 +45,166 @@ describe('market data store', () => {
     expect(bucket.sequence).toBe(2)
   })
 
+  it('does not discard active ladder levels as delta depth grows', () => {
+    const store = useMarketDataStore.getState()
+    store.applyEnvelope({
+      type: 'snapshot',
+      sequence: 1,
+      symbol: 'SIM',
+      payload: {
+        depth: 20,
+        bids: Array.from({ length: 20 }, (_, index) => ({
+          side: 'buy' as const,
+          price: 100 - index,
+          quantity: 1,
+          orderCount: 1,
+        })),
+        asks: [],
+        bestBid: 100,
+        bestAsk: null,
+        spread: 0,
+        midPrice: 100,
+        timestamp: 1,
+      },
+    })
+
+    for (let index = 0; index < 25; index += 1) {
+      store.applyEnvelope({
+        type: 'book_delta',
+        sequence: index + 2,
+        symbol: 'SIM',
+        payload: {
+          side: 'buy',
+          price: 101 + index,
+          quantity: 1,
+          orderCount: 1,
+          action: 'upsert',
+          timestamp: index + 2,
+        },
+      })
+    }
+
+    store.applyEnvelope({
+      type: 'book_delta',
+      sequence: 27,
+      symbol: 'SIM',
+      payload: {
+        side: 'buy',
+        price: 125,
+        quantity: 0,
+        orderCount: 0,
+        action: 'remove',
+        timestamp: 27,
+      },
+    })
+
+    const bids = useMarketDataStore.getState().bySymbol.SIM.bids
+    expect(bids).toHaveLength(44)
+    expect(bids.some((level) => level.price === 81)).toBe(true)
+  })
+
+  it('always applies reconnect snapshots even when sequence is not newer', () => {
+    const store = useMarketDataStore.getState()
+
+    store.applyEnvelope({
+      type: 'snapshot',
+      sequence: 50,
+      symbol: 'SIM',
+      payload: {
+        depth: 20,
+        bids: [{ side: 'buy', price: 100, quantity: 5, orderCount: 1 }],
+        asks: [{ side: 'sell', price: 101, quantity: 7, orderCount: 1 }],
+        bestBid: 100,
+        bestAsk: 101,
+        spread: 1,
+        midPrice: 100,
+        timestamp: 10,
+      },
+    })
+
+    store.applyEnvelope({
+      type: 'book_delta',
+      sequence: 51,
+      symbol: 'SIM',
+      payload: {
+        side: 'buy',
+        price: 99,
+        quantity: 3,
+        orderCount: 1,
+        action: 'upsert',
+        timestamp: 11,
+      },
+    })
+
+    // Server resync reuses currentSequence_ after a quiet disconnect.
+    store.applyEnvelope({
+      type: 'snapshot',
+      sequence: 51,
+      symbol: 'SIM',
+      payload: {
+        depth: 20,
+        bids: [{ side: 'buy', price: 100, quantity: 10, orderCount: 1 }],
+        asks: [{ side: 'sell', price: 102, quantity: 4, orderCount: 1 }],
+        bestBid: 100,
+        bestAsk: 102,
+        spread: 2,
+        midPrice: 101,
+        timestamp: 20,
+      },
+    })
+
+    const bucket = useMarketDataStore.getState().bySymbol['SIM']
+    expect(bucket.bids).toEqual([{ side: 'buy', price: 100, quantity: 10, orderCount: 1 }])
+    expect(bucket.asks).toEqual([{ side: 'sell', price: 102, quantity: 4, orderCount: 1 }])
+    expect(bucket.sequence).toBe(51)
+    expect(bucket.trades).toEqual([])
+  })
+
+  it('applies post-restart snapshots after prepareResync clears sequence gate', () => {
+    const store = useMarketDataStore.getState()
+
+    store.applyEnvelope({
+      type: 'snapshot',
+      sequence: 5000,
+      symbol: 'SIM',
+      payload: {
+        depth: 20,
+        bids: [{ side: 'buy', price: 90, quantity: 1, orderCount: 1 }],
+        asks: [{ side: 'sell', price: 91, quantity: 1, orderCount: 1 }],
+        bestBid: 90,
+        bestAsk: 91,
+        spread: 1,
+        midPrice: 90,
+        timestamp: 1,
+      },
+    })
+
+    store.prepareResync()
+    expect(useMarketDataStore.getState().streamSequence).toBe(0)
+    expect(useMarketDataStore.getState().bySymbol['SIM'].bids).toEqual([])
+
+    store.applyEnvelope({
+      type: 'snapshot',
+      sequence: 1,
+      symbol: 'SIM',
+      payload: {
+        depth: 20,
+        bids: [{ side: 'buy', price: 200, quantity: 8, orderCount: 1 }],
+        asks: [{ side: 'sell', price: 201, quantity: 9, orderCount: 1 }],
+        bestBid: 200,
+        bestAsk: 201,
+        spread: 1,
+        midPrice: 200,
+        timestamp: 2,
+      },
+    })
+
+    const bucket = useMarketDataStore.getState().bySymbol['SIM']
+    expect(bucket.bids[0].price).toBe(200)
+    expect(bucket.sequence).toBe(1)
+    expect(useMarketDataStore.getState().streamSequence).toBe(1)
+  })
+
   it('accepts global sequence gaps because non-market frames share the sequence', () => {
     const state = useMarketDataStore.getState()
     state.applyEnvelope({

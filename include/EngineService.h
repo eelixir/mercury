@@ -13,6 +13,7 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -77,12 +78,18 @@ namespace Mercury {
 
         std::atomic<bool> running_{false};
         std::atomic<bool> stopRequested_{false};
+        // When false, invoke() refuses new work. Cleared only after the engine
+        // thread has joined and leftover tasks have been drained, so futures
+        // never hang waiting on a dead engine.
+        std::atomic<bool> acceptTasks_{false};
         std::atomic<bool> replayActive_{false};
         std::atomic<uint64_t> nextOrderId_{1};
 
         std::thread engineThread_;
         std::thread replayThread_;
 
+        // Serializes start()/stop() so stop cannot race a concurrent restart.
+        std::mutex lifecycleMutex_;
         std::mutex queueMutex_;
         std::condition_variable queueCv_;
         std::queue<Task> taskQueue_;
@@ -132,18 +139,26 @@ namespace Mercury {
         auto promise = std::make_shared<std::promise<Result>>();
         auto future = promise->get_future();
 
-        enqueue([promise, fn = std::forward<F>(fn)]() mutable {
-            try {
-                if constexpr (std::is_void_v<Result>) {
-                    fn();
-                    promise->set_value();
-                } else {
-                    promise->set_value(fn());
-                }
-            } catch (...) {
-                promise->set_exception(std::current_exception());
+        {
+            std::lock_guard<std::mutex> lock(queueMutex_);
+            if (!acceptTasks_.load()) {
+                throw std::runtime_error("EngineService is not accepting tasks");
             }
-        });
+
+            taskQueue_.push([promise, fn = std::forward<F>(fn)]() mutable {
+                try {
+                    if constexpr (std::is_void_v<Result>) {
+                        fn();
+                        promise->set_value();
+                    } else {
+                        promise->set_value(fn());
+                    }
+                } catch (...) {
+                    promise->set_exception(std::current_exception());
+                }
+            });
+        }
+        queueCv_.notify_one();
 
         return future.get();
     }

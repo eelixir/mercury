@@ -5,9 +5,11 @@
 #include <string>
 #include <fstream>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <atomic>
 #include <limits>
+#include <unordered_map>
 
 namespace Mercury {
     /**
@@ -17,6 +19,26 @@ namespace Mercury {
     inline int64_t safeQuantityToInt64(uint64_t qty) {
         constexpr uint64_t MAX_SAFE = static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
         return (qty > MAX_SAFE) ? std::numeric_limits<int64_t>::max() : static_cast<int64_t>(qty);
+    }
+
+    /**
+     * Safe int64 multiply for price * quantity style products.
+     * Saturates at +/- INT64_MAX on overflow.
+     */
+    inline int64_t safeMultiplyInt64(int64_t a, int64_t b) {
+        if (a == 0 || b == 0) {
+            return 0;
+        }
+        const bool negative = (a < 0) != (b < 0);
+        const uint64_t ua = static_cast<uint64_t>(a < 0 ? -a : a);
+        const uint64_t ub = static_cast<uint64_t>(b < 0 ? -b : b);
+        constexpr uint64_t kMax = static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
+        if (ua > kMax / ub) {
+            return negative ? std::numeric_limits<int64_t>::min() + 1
+                            : std::numeric_limits<int64_t>::max();
+        }
+        const int64_t product = static_cast<int64_t>(ua * ub);
+        return negative ? -product : product;
     }
 }
 
@@ -238,6 +260,8 @@ namespace Mercury {
         RiskLimits defaultLimits_;
         HashMap<uint64_t, RiskLimits> clientLimits_;
         HashMap<uint64_t, ClientPosition> clientPositions_;
+        // Sliding 1-second windows of order submission timestamps per client.
+        std::unordered_map<uint64_t, std::deque<uint64_t>> orderTimestampsByClient_;
 
         std::atomic<uint64_t> eventIdCounter_{0};
         std::atomic<uint64_t> currentTimestamp_{0};
@@ -274,6 +298,11 @@ namespace Mercury {
          * Check single order limits
          */
         RiskEvent checkOrderLimits(const Order& order, const RiskLimits& limits);
+
+        /**
+         * Check per-client order rate (orders per second window).
+         */
+        RiskEvent checkOrderRateLimits(const Order& order, const RiskLimits& limits);
 
         /**
          * Check open order limits
